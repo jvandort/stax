@@ -1,0 +1,34 @@
+.idea/
+.intellijPlatform/
+*.iml
+*.ipr
+*.iws
+
+node_modules/
+
+/profile-out/
+/profile-out-*/
+/gradle-user-home/
+/home with spaces/
+
+**/.classpath
+**/.project
+**/.settings/
+
+.gradle/
+.kotlin/
+
+.DS_Store
+
+**/build/
+**/out/
+**/bin/
+**/target/
+
+hs_err_pid*.log
+
+/local.properties
+/incoming-distributions/
+
+# Default installation directory
+/distribution

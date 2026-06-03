@@ -202,13 +202,14 @@ abstract class CompileRustTask : DefaultTask() {
 }
 
 val rustSrcDir = layout.projectDirectory.dir("src/main/rust")
+val rustBuildDir = layout.buildDirectory.dir("wasm-build")
 
 val compileRust = tasks.register<CompileRustTask>("compileRust") {
     srcDir.set(rustSrcDir)
     wasmPackBin.set(unpackWasmPack.flatMap { it.binFile })
     cargoHome.set(installRust.flatMap { it.cargoHome })
     rustupHome.set(installRust.flatMap { it.rustupHome })
-    buildDir.set(layout.buildDirectory.dir("wasm-build"))
+    buildDir.set(rustBuildDir)
     outputDir.set(layout.buildDirectory.dir("wasm"))
 }
 
@@ -224,6 +225,9 @@ abstract class CargoCmdlineTask : DefaultTask() {
     @get:InputDirectory
     abstract val rustupHome: DirectoryProperty
 
+    @get:Internal
+    abstract val buildDir: DirectoryProperty
+
     @get:InputDirectory
     abstract val workingDir: DirectoryProperty
 
@@ -236,7 +240,8 @@ abstract class CargoCmdlineTask : DefaultTask() {
             environment(mapOf(
                 "RUSTUP_HOME" to rustupHome.get().asFile.absolutePath,
                 "CARGO_HOME" to cargoHome.get().asFile.absolutePath,
-                "PATH" to "${cargoHome.get().asFile.absolutePath}/bin${File.pathSeparator}${System.getenv("PATH")}"
+                "PATH" to "${cargoHome.get().asFile.absolutePath}/bin${File.pathSeparator}${System.getenv("PATH")}",
+                "CARGO_TARGET_DIR" to buildDir.get().asFile.absolutePath,
             ))
             workingDir(this@CargoCmdlineTask.workingDir.get().asFile)
             executable = "${cargoHome.get().asFile.absolutePath}/bin/cargo${Extensions.executable}"
@@ -254,6 +259,7 @@ tasks.register<CargoCmdlineTask>("cargo") {
 val cargoTest = tasks.register<CargoCmdlineTask>("cargoTest") {
     cargoHome.set(installRust.flatMap { it.cargoHome })
     rustupHome.set(installRust.flatMap { it.rustupHome })
+    buildDir.set(rustBuildDir)
     workingDir.set(rustSrcDir)
     cmd.set("test")
 }

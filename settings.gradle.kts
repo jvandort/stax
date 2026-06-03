@@ -1,3 +1,8 @@
 rootProject.name = "stax"
 
-include("flamegraph")
+fun subproject(name: String) {
+    include(name)
+    project(":$name").projectDir = file("subprojects/$name")
+}
+
+subproject("flamegraph")

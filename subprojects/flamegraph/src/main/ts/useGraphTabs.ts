@@ -122,7 +122,11 @@ export function useGraphTabs() {
             if (!graph) return
             const nodeName = graph.getNodeName(nodeId)
             const newTabId = `${tabId}:merge:${nodeName}`
-            submitJob(newTabId, { type: "mergeChildren", nodeName, graph: graph.toRaw() }, [])
+            submitJob(
+                newTabId,
+                { type: "mergeChildren", nodeName, graph: graph.toRaw() },
+                [],
+            )
             setSelectedTab(newTabId)
         },
         [submitJob],
@@ -134,7 +138,11 @@ export function useGraphTabs() {
             if (!graph) return
             const nodeName = graph.getNodeName(nodeId)
             const newTabId = `${tabId}:icicle:${nodeName}`
-            submitJob(newTabId, { type: "icicleGraph", nodeId, graph: graph.toRaw() }, [])
+            submitJob(
+                newTabId,
+                { type: "icicleGraph", nodeId, graph: graph.toRaw() },
+                [],
+            )
             setSelectedTab(newTabId)
         },
         [submitJob],

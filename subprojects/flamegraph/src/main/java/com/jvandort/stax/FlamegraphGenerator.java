@@ -113,14 +113,14 @@ public class FlamegraphGenerator {
                     String names = stacksFiles.stream()
                         .map(p -> toBase64(p.getFileName().toString()))
                         .collect(Collectors.joining(","));
-                    writeUtf8(output, "<template id=\"embedded-stacks-names\">\n");
+                    writeUtf8(output, "<template id=\"embedded-stacks-names\">");
                     writeUtf8(output, names);
-                    writeUtf8(output, "\n</template>\n");
+                    writeUtf8(output, "</template>\n");
 
                     for (int i = 0; i < stacksFiles.size(); i++) {
-                        writeUtf8(output, "<template id=\"embedded-stacks-" + i + "\">\n");
+                        writeUtf8(output, "<template id=\"embedded-stacks-" + i + "\">");
                         embedStacksParallel(stacksFiles.get(i), output);
-                        writeUtf8(output, "\n</template>\n");
+                        writeUtf8(output, "</template>\n");
                     }
                 }
 

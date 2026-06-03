@@ -30,14 +30,12 @@
 
     "isolatedModules": true,
     "esModuleInterop": true,
-    "baseUrl": ".",
     "paths": {
       "@flamegraph-wasm": ["./build/wasm"]
     }
   },
   "include": [
     "src/main/ts",
-    "vite.config.ts",
-    "types/**/*"
+    "vite.config.ts"
   ],
 }

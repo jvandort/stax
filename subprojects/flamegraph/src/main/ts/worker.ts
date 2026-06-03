@@ -1,13 +1,12 @@
-import { decodeBase64 } from "./encoding.ts"
-import init, {
-    StacksParser,
-    wasm_delete_node,
-    wasm_icicle_graph,
-    wasm_merge_children,
-    WasmStackGraph,
-} from "@flamegraph-wasm"
+import init from "@flamegraph-wasm"
+import {
+    parseEncodedData,
+    processStream,
+    mergeChildren,
+    icicleGraph,
+    deleteNode,
+} from "./wasmBridge.ts"
 import type { StackGraph } from "./stackGraph"
-import { nodeCount } from "./stackGraph"
 
 let resolveWasmReady: () => void
 const wasmReady = new Promise<void>((resolve) => {
@@ -76,142 +75,17 @@ export interface WorkerFailure {
 
 export type WorkerResponse = WorkerSuccess | WorkerFailure
 
-/**
- * Extract typed arrays from a WasmStackGraph and free the Rust-owned memory.
- * Each method call allocates a new JS typed array and copies data out of WASM
- * linear memory into it. These types arrays can then be zero-copy transferred to
- * the DOM thread.
- */
-const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraph => {
-    const childrenOffsets = wg.children_offsets()
-    const childrenData = wg.children_data()
-    const namesData = wg.names_data()
-    const namesOffsets = wg.names_offsets()
-    const displayNamesData = wg.display_names_data()
-    const displayNamesOffsets = wg.display_names_offsets()
-    const values = wg.values()
-    wg.free()
-    return {
-        childrenOffsets,
-        childrenData,
-        namesData,
-        namesOffsets,
-        displayNamesData,
-        displayNamesOffsets,
-        values,
-    }
-}
-
-const processStream = async (
-    stream: ReadableStream<Uint8Array>,
-): Promise<WorkerResult> => {
-    const parser = new StacksParser("root")
-    const reader = stream.getReader()
-    while (true) {
-        const { done, value } = await reader.read()
-        if (value) {
-            parser.feed(value)
-        }
-        if (done) {
-            break
-        }
-    }
-    const graph = parser.finish()
-    return { graph: wasmGraphToStackGraph(graph) }
-}
-
-const mergeChildren = (job: MergeChildrenJob): WorkerResult => {
-    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
-        job.graph
-    const wasmGraph = wasm_merge_children(
-        childrenOffsets,
-        childrenData,
-        namesData,
-        namesOffsets,
-        values,
-        job.nodeName,
-    )
-    return { graph: wasmGraphToStackGraph(wasmGraph) }
-}
-
-const icicleGraph = (job: IcicleGraphJob): WorkerResult => {
-    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
-        job.graph
-    const wasmGraph = wasm_icicle_graph(
-        childrenOffsets,
-        childrenData,
-        namesData,
-        namesOffsets,
-        values,
-        job.nodeId,
-        nodeCount(job.graph),
-    )
-    return { graph: wasmGraphToStackGraph(wasmGraph) }
-}
-
-const parseEncodedData = async (
-    job: ParseEncodedDataJob,
-): Promise<WorkerResult> => {
-    const CHUNK_SIZE_BYTES = 1024 * 1024
-    const encoded = decodeBase64(job.encodedData)
-
-    let position = 0
-    const stream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-            if (position >= encoded.length) {
-                controller.close()
-                return
-            }
-            const end = Math.min(position + CHUNK_SIZE_BYTES, encoded.length)
-            controller.enqueue(encoded.subarray(position, end))
-            position = end
-        },
-    }).pipeThrough(
-        // DecompressionStream.writable is typed as WritableStream<BufferSource>; cast is safe
-        // because we always feed Uint8Array chunks.
-        new DecompressionStream("deflate-raw") as unknown as TransformStream<
-            Uint8Array,
-            Uint8Array
-        >,
-    )
-
-    return await processStream(stream)
-}
-
-const deleteNode = (job: DeleteNodeJob): WorkerResult => {
-    const {
-        childrenOffsets,
-        childrenData,
-        namesData,
-        namesOffsets,
-        values,
-        displayNamesData,
-        displayNamesOffsets,
-    } = job.graph
-    const wasmGraph = wasm_delete_node(
-        childrenOffsets,
-        childrenData,
-        namesData,
-        namesOffsets,
-        values,
-        displayNamesData,
-        displayNamesOffsets,
-        job.nodeId,
-    )
-    return { graph: wasmGraphToStackGraph(wasmGraph) }
-}
-
 const process = async (job: Job): Promise<WorkerResult> => {
     if (job.type == "parseStream") {
-        return await processStream(job.stream)
+        return { graph: await processStream(job.stream) }
     } else if (job.type == "mergeChildren") {
-        return mergeChildren(job)
+        return { graph: mergeChildren(job.graph, job.nodeName) }
     } else if (job.type == "icicleGraph") {
-        return icicleGraph(job)
+        return { graph: icicleGraph(job.graph, job.nodeId) }
     } else if (job.type == "parseEncodedData") {
-        return await parseEncodedData(job)
+        return { graph: await parseEncodedData(job.encodedData) }
     } else if (job.type == "deleteNode") {
-        return deleteNode(job)
+        return { graph: deleteNode(job.graph, job.nodeId) }
     }
 
     throw new Error("Unknown job type")

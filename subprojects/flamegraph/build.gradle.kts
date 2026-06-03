@@ -107,7 +107,7 @@ val downloadWasmPack = tasks.register<DownloadTask>("downloadWasmPack") {
 
     val wasmPackVersion = "0.14.0"
     val ext = Extensions.archive
-    url.set("https://github.com/drager/wasm-pack/releases/download/v$wasmPackVersion/wasm-pack-v$wasmPackVersion-${getTarget(isWasmPack = true)}$ext")
+    url.set("https://github.com/wasm-bindgen/wasm-pack/releases/download/v$wasmPackVersion/wasm-pack-v$wasmPackVersion-${getTarget(isWasmPack = true)}$ext")
     destination.set(layout.buildDirectory.file("rust-downloads/wasm-pack$ext"))
 }
 
@@ -355,16 +355,16 @@ abstract class GenerateDemoTask : DefaultTask() {
     @get:OutputFile
     abstract val outputFile: RegularFileProperty
 
-    @get:InputFiles
+    @get:Input
     @get:Option(option = "stacks", description = "The stacks files to embed in the demo")
-    abstract val stacks: ListProperty<String>
+    abstract val stacks: Property<String>
 
     @TaskAction
     fun generate() {
         execOperations.javaexec {
             classpath(this@GenerateDemoTask.classpath)
             mainClass.set("com.jvandort.stax.FlamegraphGenerator")
-            args(stacks.get() + listOf(outputFile.get().asFile.absolutePath))
+            args(stacks.get().split(" ") + listOf(outputFile.get().asFile.absolutePath))
         }
     }
 

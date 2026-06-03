@@ -1,4 +1,4 @@
-package org.gradle.profiler.flamegraph;
+package com.jvandort.stax;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -43,7 +43,7 @@ public class FlamegraphGenerator {
     /**
      * Location in jar of the application bundle template to embed stacks files into.
      */
-    private static final String FLAMEGRAPH_HTML_TEMPLATE_PATH = "/org/gradle/profiler/flamegraph/index.html";
+    private static final String FLAMEGRAPH_HTML_TEMPLATE_PATH = "/com/jvandort/stax/index.html";
 
     /**
      * Command-line entry point. Accepts one or more absolute stacks file paths followed by

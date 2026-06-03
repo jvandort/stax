@@ -339,7 +339,7 @@ tasks.clean {
 tasks.named<ProcessResources>("processResources") {
     dependsOn(buildVite)
     from(layout.buildDirectory.file("vite/index.html")) {
-        into("org/gradle/profiler/flamegraph")
+        into("com/jvandort/stax")
     }
 }
 
@@ -363,7 +363,7 @@ abstract class GenerateDemoTask : DefaultTask() {
     fun generate() {
         execOperations.javaexec {
             classpath(this@GenerateDemoTask.classpath)
-            mainClass.set("org.gradle.profiler.flamegraph.FlamegraphGenerator")
+            mainClass.set("com.jvandort.stax.FlamegraphGenerator")
             args(stacks.get() + listOf(outputFile.get().asFile.absolutePath))
         }
     }

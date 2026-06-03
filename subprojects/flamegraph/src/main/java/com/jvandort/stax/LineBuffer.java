@@ -1,4 +1,4 @@
-package org.gradle.profiler.flamegraph;
+package com.jvandort.stax;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

@@ -316,12 +316,16 @@ function toolListGraphs(): string {
     return `${graphMap.size} profile(s) loaded:\n${lines.join("\n")}`
 }
 
-function toolSearchByName(graphId: number, pattern: string, limit = 10, offset = 0): string {
+function toolSearchByName(graphId: number, pattern: string, limit = 10, offset = 0, rootNodeId = 0): string {
     const resolved = resolveGraph(graphId)
     if (typeof resolved === "string") {
         return resolved
     }
     const { name, graph } = resolved
+
+    if (rootNodeId < 0 || rootNodeId >= graph.nodeCount) {
+        return `Node ID ${rootNodeId} out of range (0–${graph.nodeCount - 1}).`
+    }
 
     let regex: RegExp
     try {
@@ -331,29 +335,54 @@ function toolSearchByName(graphId: number, pattern: string, limit = 10, offset =
     }
 
     const total = graph.values[0] ?? 0n
-    const matches: Array<{ nodeId: number; value: bigint }> = []
-    for (let i = 1; i < graph.nodeCount; i++) {
+
+    // Collect nodes to search: if rooted at a subtree, BFS from rootNodeId.
+    const searchNodes: number[] = []
+    if (rootNodeId === 0) {
+        for (let i = 1; i < graph.nodeCount; i++) {
+            searchNodes.push(i)
+        }
+    } else {
+        const queue = [rootNodeId]
+        for (let head = 0; head < queue.length; head++) {
+            const nid = queue[head]!
+            searchNodes.push(nid)
+            for (const child of graph.getChildren(nid)) {
+                queue.push(child)
+            }
+        }
+    }
+
+    const matches: Array<{ nodeId: number; value: bigint; selfValue: bigint }> = []
+    for (const i of searchNodes) {
         if (regex.test(graph.getNodeName(i))) {
-            matches.push({ nodeId: i, value: graph.values[i] ?? 0n })
+            const value = graph.values[i] ?? 0n
+            let selfValue = value
+            for (const child of graph.getChildren(i)) {
+                selfValue -= graph.values[child] ?? 0n
+            }
+            matches.push({ nodeId: i, value, selfValue })
         }
     }
 
     if (matches.length === 0) {
-        return `No nodes matching /${pattern}/i in "${name}".`
+        return `No nodes matching /${pattern}/i in "${name}"${rootNodeId !== 0 ? ` under [${rootNodeId}]` : ""}.`
     }
 
     matches.sort((a, b) => Number(b.value - a.value))
     const matchTotal = matches.reduce((sum, { value }) => sum + value, 0n)
     const shown = matches.slice(offset, offset + limit)
     const parentMap = buildParentMap(graph)
-    const lines = shown.map(({ nodeId, value }) => {
+    const lines = shown.map(({ nodeId, value, selfValue }) => {
         const parentId = parentMap[nodeId] ?? -1
         const parentStr = parentId === -1 ? "root" : `[${parentId}] ${graph.getDisplayName(parentId)}`
-        return `  [${nodeId}] ${graph.getDisplayName(nodeId)}  ${formatSamples(value, total)}  parent: ${parentStr}`
+        const selfStr = selfValue > 0n ? `, self: ${formatSamples(selfValue, total)}` : ""
+        return `  [${nodeId}] ${graph.getDisplayName(nodeId)}, ${formatSamples(value, total)}${selfStr}, parent: ${parentStr}`
     })
     const remaining = matches.length - offset - shown.length
     const suffix = remaining > 0 ? `\n  (${remaining} more not shown)` : ""
-    return `${matches.length} node(s) matching /${pattern}/i in "${name}" — combined: ${formatSamples(matchTotal, total)} (showing ${shown.length} from offset ${offset}):\n${lines.join("\n")}${suffix}`
+    const scopeStr = rootNodeId !== 0 ? ` under [${rootNodeId}]` : ""
+    return `${matches.length} node(s) matching /${pattern}/i in "${name}"${scopeStr} — combined: ${formatSamples(matchTotal, total)} (showing ${shown.length} from offset ${offset}):\n${lines.join("\n")}${suffix}`
 }
 
 function toolNodeSummary(graphId: number, nodeId: number, parentDepth = 10): string {
@@ -433,18 +462,43 @@ function toolChildrenOfNode(graphId: number, nodeId: number, limit = 10): string
     return `Children of [${nodeId}] "${graph.getDisplayName(nodeId)}" in "${name}" (${shown.length}/${children.length}):\n${lines.join("\n")}${suffix}`
 }
 
-function toolAggregateByName(graphId: number, nodeId: number): string {
+function toolAggregateByName(graphId: number, nodeId?: number, pattern?: string): string {
     const resolved = resolveGraph(graphId)
     if (typeof resolved === "string") {
         return resolved
     }
     const { name, graph } = resolved
 
-    if (nodeId < 0 || nodeId >= graph.nodeCount) {
-        return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
+    let resolvedNodeId: number
+    if (nodeId != null) {
+        if (nodeId < 0 || nodeId >= graph.nodeCount) {
+            return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
+        }
+        resolvedNodeId = nodeId
+    } else if (pattern != null) {
+        let regex: RegExp
+        try {
+            regex = new RegExp(pattern, "i")
+        } catch (e: any) {
+            return `Invalid regex: ${e?.message}`
+        }
+        let bestId = -1
+        let bestValue = -1n
+        for (let i = 1; i < graph.nodeCount; i++) {
+            if (regex.test(graph.getNodeName(i)) && (graph.values[i] ?? 0n) > bestValue) {
+                bestId = i
+                bestValue = graph.values[i] ?? 0n
+            }
+        }
+        if (bestId === -1) {
+            return `No nodes matching /${pattern}/i in "${name}".`
+        }
+        resolvedNodeId = bestId
+    } else {
+        return "Either node_id or pattern must be provided."
     }
 
-    const nodeName = graph.getNodeName(nodeId)
+    const nodeName = graph.getNodeName(resolvedNodeId)
     const raw = graph.toRaw()
     const wg = wasm_merge_children(
         raw.childrenOffsets,
@@ -455,7 +509,7 @@ function toolAggregateByName(graphId: number, nodeId: number): string {
         nodeName,
     )
     const newGraph = wasmGraphToGraph(wg)
-    const entry = registerGraph(`${name} [merged: ${graph.getDisplayName(nodeId)}]`, newGraph)
+    const entry = registerGraph(`${name} [merged: ${graph.getDisplayName(resolvedNodeId)}]`, newGraph)
 
     // Sum inclusive values of all matching nodes in the source graph.
     // If this exceeds the merged root, the difference represents samples that
@@ -587,6 +641,97 @@ function toolDeleteGraph(graphId: number): string {
     return `Deleted graph ${graphId} "${name}". ${graphMap.size} graph(s) remaining.`
 }
 
+function toolSubtreeSummary(graphId: number, nodeId: number, maxLines = 40): string {
+    const resolved = resolveGraph(graphId)
+    if (typeof resolved === "string") {
+        return resolved
+    }
+    const { name, graph } = resolved
+
+    if (nodeId < 0 || nodeId >= graph.nodeCount) {
+        return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
+    }
+
+    const total = graph.values[0] ?? 0n
+
+    interface SummaryNode {
+        nid: number
+        displayName: string
+        value: bigint
+        selfValue: bigint
+        totalChildren: number
+        children: SummaryNode[]
+    }
+
+    // Pass 1: recursive budget allocation, builds a lightweight tree.
+    function visit(nid: number, budget: number): SummaryNode {
+        const value = graph.values[nid] ?? 0n
+        let selfValue = value
+        const children = Array.from(graph.getChildren(nid))
+        for (const child of children) {
+            selfValue -= graph.values[child] ?? 0n
+        }
+
+        const node: SummaryNode = {
+            nid,
+            displayName: graph.getDisplayName(nid),
+            value,
+            selfValue,
+            totalChildren: children.length,
+            children: [],
+        }
+
+        if (children.length === 0 || budget <= 1) return node
+
+        children.sort((a, b) => Number((graph.values[b] ?? 0n) - (graph.values[a] ?? 0n)))
+
+        let weightLeft = Number(value - selfValue)
+        let budgetLeft = budget - 1
+        for (const child of children) {
+            if (budgetLeft <= 0 || weightLeft <= 0) break
+            const childValue = Number(graph.values[child] ?? 0n)
+            const alloc = Math.ceil(childValue / weightLeft * budgetLeft)
+            weightLeft -= childValue
+            if (alloc === 0) continue
+            const childNode = visit(child, alloc)
+            budgetLeft -= countNodes(childNode)
+            node.children.push(childNode)
+        }
+
+        return node
+    }
+
+    function countNodes(node: SummaryNode): number {
+        let count = 1
+        for (const child of node.children) {
+            count += countNodes(child)
+        }
+        return count
+    }
+
+    // Pass 2: render the tree with correct box-drawing prefixes.
+    function render(node: SummaryNode, ownPrefix: string, childPrefix: string, lines: string[]): void {
+        const selfStr = node.selfValue > 0n ? `, self: ${formatSamples(node.selfValue, total)}` : ""
+        const childStr = node.totalChildren > 0 ? `, children: ${node.totalChildren}` : ""
+        lines.push(`${ownPrefix}[${node.nid}] ${node.displayName}, ${formatSamples(node.value, total)}${selfStr}${childStr}`)
+        for (let i = 0; i < node.children.length; i++) {
+            const isLast = i === node.children.length - 1
+            render(
+                node.children[i]!,
+                childPrefix + (isLast ? "└─ " : "├─ "),
+                childPrefix + (isLast ? "   " : "│  "),
+                lines,
+            )
+        }
+    }
+
+    const tree = visit(nodeId, maxLines)
+    const lines: string[] = []
+    render(tree, "", "", lines)
+
+    return `Subtree summary of [${nodeId}] in "${name}" (${lines.length} lines):\n${lines.join("\n")}`
+}
+
 const TOOLS = [
     {
         name: "list_graphs",
@@ -595,7 +740,7 @@ const TOOLS = [
     },
     {
         name: "search_by_name",
-        description: "Search for nodes whose names match a regex pattern (case-insensitive). Returns matching node IDs sorted by sample count descending.",
+        description: "Search for nodes whose names match a regex pattern (case-insensitive). Returns matching node IDs sorted by sample count descending, with total and self samples.",
         inputSchema: {
             type: "object",
             properties: {
@@ -603,12 +748,13 @@ const TOOLS = [
                 pattern: { type: "string", description: "Case-insensitive regex pattern to match against node names" },
                 limit: { type: "number", description: "Maximum number of results (default 10)" },
                 offset: { type: "number", description: "Number of results to skip for pagination (default 0)" },
+                node_id: { type: "number", description: "Restrict search to the subtree rooted at this node (default: 0, the whole graph)" },
             },
             required: ["graph_id", "pattern"],
         },
     },
     {
-        name: "node_summary",
+        name: "node_details",
         description: "Get a summary of a node: name, self samples, total samples, number of children, and parent chain to root.",
         inputSchema: {
             type: "object",
@@ -635,14 +781,15 @@ const TOOLS = [
     },
     {
         name: "aggregate_by_name",
-        description: "Aggregate all call sites with the same name as the given node into a single merged graph. The provided node is used only as a name lookup — all matching nodes across the entire graph are merged. Returns the ID of the new graph.",
+        description: "Aggregate all call sites with the same name into a single merged graph. Provide either node_id (uses that node's raw name as the merge key) or pattern (regex — uses the highest-sample match). These are mutually exclusive.",
         inputSchema: {
             type: "object",
             properties: {
                 graph_id: { type: "number", description: "Source graph ID" },
-                node_id: { type: "number", description: "Node whose raw name will be used as the merge key" },
+                node_id: { type: "number", description: "Node whose raw name will be used as the merge key (mutually exclusive with pattern)" },
+                pattern: { type: "string", description: "Case-insensitive regex — the highest-sample matching node's name is used as the merge key (mutually exclusive with node_id)" },
             },
-            required: ["graph_id", "node_id"],
+            required: ["graph_id"],
         },
     },
     {
@@ -678,6 +825,19 @@ const TOOLS = [
                 graph_id: { type: "number", description: "Graph ID from list_graphs" },
                 node_id: { type: "number", description: "Starting node ID" },
                 depth_limit: { type: "number", description: "Maximum depth to follow (default: unlimited)" },
+            },
+            required: ["graph_id", "node_id"],
+        },
+    },
+    {
+        name: "subtree_summary",
+        description: "Print a weighted summary of the subtree rooted at a node. Proportionally allocates a line budget to heavier branches, truncating narrow ones. Useful for getting a quick overview of where time is spent under a node.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                graph_id: { type: "number", description: "Graph ID from list_graphs" },
+                node_id: { type: "number", description: "Root node ID for the summary" },
+                max_lines: { type: "number", description: "Maximum number of output lines (default 40)" },
             },
             required: ["graph_id", "node_id"],
         },
@@ -739,8 +899,13 @@ function handleMessage(line: string): void {
     if (method === "tools/call") {
         const toolName = params?.name
         const rawArgs = params?.arguments ?? {}
-        // Coerce graph_id to number in case the model passes it as a string.
-        const args = { ...rawArgs, graph_id: rawArgs.graph_id != null ? Number(rawArgs.graph_id) : rawArgs.graph_id }
+        // Coerce numeric arguments — models sometimes pass them as strings,
+        // which turns `id + 1` into string concatenation instead of addition.
+        const args: any = Object.fromEntries(
+            Object.entries(rawArgs).map(([k, v]) =>
+                [k, typeof v === "string" && v !== "" && !isNaN(Number(v)) ? Number(v) : v]
+            )
+        )
         let text: string
         try {
             if (toolName === "list_graphs") {
@@ -748,8 +913,8 @@ function handleMessage(line: string): void {
             } else if (toolName === "search_by_name") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (!args.pattern) { respondError(id, -32602, "Missing required argument: pattern"); return }
-                text = toolSearchByName(args.graph_id, args.pattern, args.limit, args.offset)
-            } else if (toolName === "node_summary") {
+                text = toolSearchByName(args.graph_id, args.pattern, args.limit, args.offset, args.node_id)
+            } else if (toolName === "node_details") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
                 text = toolNodeSummary(args.graph_id, args.node_id, args.parent_depth)
@@ -759,8 +924,9 @@ function handleMessage(line: string): void {
                 text = toolChildrenOfNode(args.graph_id, args.node_id, args.limit)
             } else if (toolName === "aggregate_by_name") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
-                if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
-                text = toolAggregateByName(args.graph_id, args.node_id)
+                if (args.node_id == null && !args.pattern) { respondError(id, -32602, "Either node_id or pattern must be provided"); return }
+                if (args.node_id != null && args.pattern) { respondError(id, -32602, "node_id and pattern are mutually exclusive"); return }
+                text = toolAggregateByName(args.graph_id, args.node_id, args.pattern)
             } else if (toolName === "icicle_graph") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.root_node_id == null) { respondError(id, -32602, "Missing required argument: root_node_id"); return }
@@ -773,6 +939,10 @@ function handleMessage(line: string): void {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
                 text = toolHotPath(args.graph_id, args.node_id, args.depth_limit ?? null)
+            } else if (toolName === "subtree_summary") {
+                if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
+                if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
+                text = toolSubtreeSummary(args.graph_id, args.node_id, args.max_lines)
             } else if (toolName === "delete_graph") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 text = toolDeleteGraph(args.graph_id)

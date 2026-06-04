@@ -560,7 +560,7 @@ function toolChildrenOfNode(graphId: number, nodeId: number, limit = 10): string
         return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
     }
 
-    const total = graph.values[0] ?? 0n
+    const parentValue = graph.values[nodeId] ?? 0n
     const children = Array.from(graph.getChildren(nodeId))
     children.sort((a, b) => Number((graph.values[b] ?? 0n) - (graph.values[a] ?? 0n)))
 
@@ -575,7 +575,7 @@ function toolChildrenOfNode(graphId: number, nodeId: number, limit = 10): string
         for (const grandchild of graph.getChildren(childId)) {
             childSelf -= graph.values[grandchild] ?? 0n
         }
-        return `  [${childId}] ${graph.getDisplayName(childId)}  total: ${formatSamples(childValue, total)}  self: ${formatSamples(childSelf, total)}`
+        return `  [${childId}] ${graph.getDisplayName(childId)}  total: ${formatSamples(childValue, parentValue)}  self: ${formatSamples(childSelf, parentValue)}`
     })
     const suffix = limit !== -1 && children.length > limit
         ? `\n  (${children.length - limit} more not shown)`
@@ -706,14 +706,33 @@ function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null 
         depthNote = ` (truncated at depth ${depthLimit}; full hot path: ${trueDepth} nodes)`
     }
 
-    const lines = path.map(({ nodeId: nid, value }) => {
+    // Collapse consecutive frames with the same inclusive value (pass-through wrappers).
+    const lines: string[] = []
+    let i = 0
+    while (i < path.length) {
+        const { nodeId: nid, value } = path[i]!
         let self = value
         for (const child of graph.getChildren(nid)) {
             self -= graph.values[child] ?? 0n
         }
-        return `  [${nid}] ${graph.getDisplayName(nid)}  total: ${formatSamples(value, total)}  self: ${formatSamples(self, total)}`
-    })
-    return `Hot path from [${nodeId}] in "${name}" (${path.length} nodes shown${depthNote}):\n${lines.join("\n")}`
+        lines.push(`  [${nid}] ${graph.getDisplayName(nid)}  total: ${formatSamples(value, total)}  self: ${formatSamples(self, total)}`)
+
+        // Count how many subsequent frames have the same value.
+        let j = i + 1
+        while (j < path.length && path[j]!.value === value) j++
+        const skipped = j - i - 1
+        if (skipped > 0) {
+            const last = path[j - 1]!
+            let lastSelf = last.value
+            for (const child of graph.getChildren(last.nodeId)) {
+                lastSelf -= graph.values[child] ?? 0n
+            }
+            lines.push(`  ... ${skipped} frames with same total ...`)
+            lines.push(`  [${last.nodeId}] ${graph.getDisplayName(last.nodeId)}  total: ${formatSamples(last.value, total)}  self: ${formatSamples(lastSelf, total)}`)
+        }
+        i = j
+    }
+    return `Hot path from [${nodeId}] in "${name}" (${path.length} nodes, ${lines.length} lines shown${depthNote}):\n${lines.join("\n")}`
 }
 
 function toolRawName(graphId: number, nodeId: number): string {

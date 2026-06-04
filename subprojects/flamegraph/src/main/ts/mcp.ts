@@ -305,6 +305,127 @@ function buildParentMap(graph: Graph): Int32Array {
     return parent
 }
 
+/** Resolve a node ID from either a direct node_id or a regex pattern (picks highest-sample match). */
+function resolveNodeByIdOrPattern(graph: Graph, name: string, nodeId?: number, pattern?: string): number | string {
+    if (nodeId != null) {
+        if (nodeId < 0 || nodeId >= graph.nodeCount) {
+            return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
+        }
+        return nodeId
+    }
+    if (pattern != null) {
+        let regex: RegExp
+        try {
+            regex = new RegExp(pattern, "i")
+        } catch (e: any) {
+            return `Invalid regex: ${e?.message}`
+        }
+        let bestId = -1
+        let bestValue = -1n
+        for (let i = 1; i < graph.nodeCount; i++) {
+            if (regex.test(graph.getNodeName(i)) && (graph.values[i] ?? 0n) > bestValue) {
+                bestId = i
+                bestValue = graph.values[i] ?? 0n
+            }
+        }
+        if (bestId === -1) {
+            return `No nodes matching /${pattern}/i in "${name}".`
+        }
+        return bestId
+    }
+    return "Either node_id or pattern must be provided."
+}
+
+/** A caller set: maps real node IDs to the weight attributed from below. */
+type CallerSet = Map<number, bigint>
+
+/**
+ * Abstract weighted tree that both forward (subtree) and reverse (caller) views implement.
+ * The budget-limited tree builder and box-drawing renderer operate on this interface.
+ */
+interface WeightedTree<N> {
+    displayName(node: N): string
+    weight(node: N): bigint
+    selfWeight(node: N): bigint
+    childCount(node: N): number
+    /** Returns children sorted by weight descending. */
+    sortedChildren(node: N): N[]
+    /** Optional node ID for display (e.g. forward graph has IDs, caller graph doesn't). */
+    nodeId?(node: N): number | undefined
+}
+
+interface SummaryNode {
+    nodeId?: number
+    displayName: string
+    value: bigint
+    selfValue: bigint
+    totalChildren: number
+    children: SummaryNode[]
+}
+
+/** Budget-limited tree builder. Returns actual lines used so unused budget flows to siblings. */
+function buildTree<N>(view: WeightedTree<N>, root: N, budget: number): SummaryNode {
+    function visit(node: N, budget: number): SummaryNode {
+        const value = view.weight(node)
+        const selfValue = view.selfWeight(node)
+        const totalChildren = view.childCount(node)
+
+        const result: SummaryNode = {
+            nodeId: view.nodeId?.(node),
+            displayName: view.displayName(node),
+            value,
+            selfValue,
+            totalChildren,
+            children: [],
+        }
+
+        if (totalChildren === 0 || budget <= 1) return result
+
+        const sorted = view.sortedChildren(node)
+        let weightLeft = Number(value - selfValue)
+        let budgetLeft = budget - 1
+        for (const child of sorted) {
+            if (budgetLeft <= 0 || weightLeft <= 0) break
+            const childWeight = Number(view.weight(child))
+            const alloc = Math.ceil(childWeight / weightLeft * budgetLeft)
+            weightLeft -= childWeight
+            if (alloc === 0) continue
+            const childNode = visit(child, alloc)
+            budgetLeft -= countNodes(childNode)
+            result.children.push(childNode)
+        }
+
+        return result
+    }
+
+    return visit(root, budget)
+}
+
+function countNodes(node: SummaryNode): number {
+    let count = 1
+    for (const child of node.children) count += countNodes(child)
+    return count
+}
+
+/** Render a SummaryNode tree with box-drawing. childLabel is "children" or "callers". */
+function renderTree(node: SummaryNode, total: bigint, childLabel: string, ownPrefix: string, childPrefix: string, lines: string[]): void {
+    const selfStr = node.selfValue > 0n ? `, self: ${formatSamples(node.selfValue, total)}` : ""
+    const childStr = node.totalChildren > 0 ? `, ${childLabel}: ${node.totalChildren}` : ""
+    const idStr = node.nodeId != null ? `[${node.nodeId}] ` : ""
+    lines.push(`${ownPrefix}${idStr}${node.displayName}, ${formatSamples(node.value, total)}${selfStr}${childStr}`)
+    for (let i = 0; i < node.children.length; i++) {
+        const isLast = i === node.children.length - 1
+        renderTree(
+            node.children[i]!,
+            total,
+            childLabel,
+            childPrefix + (isLast ? "└─ " : "├─ "),
+            childPrefix + (isLast ? "   " : "│  "),
+            lines,
+        )
+    }
+}
+
 function toolListGraphs(): string {
     if (graphMap.size === 0) {
         return "No profiles loaded."
@@ -469,33 +590,9 @@ function toolAggregateByName(graphId: number, nodeId?: number, pattern?: string)
     }
     const { name, graph } = resolved
 
-    let resolvedNodeId: number
-    if (nodeId != null) {
-        if (nodeId < 0 || nodeId >= graph.nodeCount) {
-            return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
-        }
-        resolvedNodeId = nodeId
-    } else if (pattern != null) {
-        let regex: RegExp
-        try {
-            regex = new RegExp(pattern, "i")
-        } catch (e: any) {
-            return `Invalid regex: ${e?.message}`
-        }
-        let bestId = -1
-        let bestValue = -1n
-        for (let i = 1; i < graph.nodeCount; i++) {
-            if (regex.test(graph.getNodeName(i)) && (graph.values[i] ?? 0n) > bestValue) {
-                bestId = i
-                bestValue = graph.values[i] ?? 0n
-            }
-        }
-        if (bestId === -1) {
-            return `No nodes matching /${pattern}/i in "${name}".`
-        }
-        resolvedNodeId = bestId
-    } else {
-        return "Either node_id or pattern must be provided."
+    const resolvedNodeId = resolveNodeByIdOrPattern(graph, name, nodeId, pattern)
+    if (typeof resolvedNodeId === "string") {
+        return resolvedNodeId
     }
 
     const nodeName = graph.getNodeName(resolvedNodeId)
@@ -531,15 +628,16 @@ function toolAggregateByName(graphId: number, nodeId?: number, pattern?: string)
     return `Created merged graph [${entry.id}] "${entry.name}" with ${newGraph.nodeCount.toLocaleString()} nodes, root node: 0.${discrepancyNote}`
 }
 
-function toolIcicleGraph(graphId: number, rootNodeId: number): string {
+function toolIcicleGraph(graphId: number, rootNodeId?: number, pattern?: string): string {
     const resolved = resolveGraph(graphId)
     if (typeof resolved === "string") {
         return resolved
     }
     const { name, graph } = resolved
 
-    if (rootNodeId < 0 || rootNodeId >= graph.nodeCount) {
-        return `Node ID ${rootNodeId} out of range (0–${graph.nodeCount - 1}).`
+    const resolvedRootId = resolveNodeByIdOrPattern(graph, name, rootNodeId, pattern)
+    if (typeof resolvedRootId === "string") {
+        return resolvedRootId
     }
 
     const raw = graph.toRaw()
@@ -549,11 +647,11 @@ function toolIcicleGraph(graphId: number, rootNodeId: number): string {
         raw.namesData,
         raw.namesOffsets,
         raw.values,
-        rootNodeId,
+        resolvedRootId,
         nodeCount(raw),
     )
     const newGraph = wasmGraphToGraph(wg)
-    const entry = registerGraph(`${name} [icicle: ${graph.getDisplayName(rootNodeId)}]`, newGraph)
+    const entry = registerGraph(`${name} [icicle: ${graph.getDisplayName(resolvedRootId)}]`, newGraph)
     return `Created icicle graph [${entry.id}] "${entry.name}" with ${newGraph.nodeCount.toLocaleString()} nodes, root node: 0.`
 }
 
@@ -632,6 +730,80 @@ function toolRawName(graphId: number, nodeId: number): string {
     return graph.getNodeName(nodeId)
 }
 
+function toolCallers(graphId: number, nodeId?: number, pattern?: string, maxLines = 40): string {
+    const resolved = resolveGraph(graphId)
+    if (typeof resolved === "string") {
+        return resolved
+    }
+    const { name, graph } = resolved
+
+    const resolvedNodeId = resolveNodeByIdOrPattern(graph, name, nodeId, pattern)
+    if (typeof resolvedNodeId === "string") {
+        return resolvedNodeId
+    }
+
+    const targetName = graph.getNodeName(resolvedNodeId)
+    const parentMap = buildParentMap(graph)
+
+    // Find all instances of this function.
+    const instances: number[] = []
+    for (let i = 0; i < graph.nodeCount; i++) {
+        if (graph.getNodeName(i) === targetName) instances.push(i)
+    }
+    if (instances.length === 0) {
+        return `No instances of "${graph.getDisplayName(resolvedNodeId)}" found.`
+    }
+
+    // Build a CallerSet for the root: each instance maps to its own inclusive value.
+    const rootSet = new Map<number, bigint>()
+    for (const nid of instances) {
+        rootSet.set(nid, (rootSet.get(nid) ?? 0n) + (graph.values[nid] ?? 0n))
+    }
+
+    const callerView: WeightedTree<CallerSet> = {
+        displayName(cs) { return graph.getDisplayName(cs.keys().next().value!) },
+        weight(cs) { let s = 0n; for (const v of cs.values()) s += v; return s },
+        selfWeight(cs) {
+            let parentWeight = 0n
+            for (const [nid, w] of cs) {
+                if ((parentMap[nid] ?? -1) !== -1) parentWeight += w
+            }
+            return this.weight(cs) - parentWeight
+        },
+        childCount(cs) {
+            const names = new Set<string>()
+            for (const nid of cs.keys()) {
+                const pid = parentMap[nid] ?? -1
+                if (pid !== -1) names.add(graph.getNodeName(pid))
+            }
+            return names.size
+        },
+        sortedChildren(cs) {
+            const groups = new Map<string, CallerSet>()
+            for (const [nid, w] of cs) {
+                const pid = parentMap[nid] ?? -1
+                if (pid === -1) continue
+                const pname = graph.getNodeName(pid)
+                let g = groups.get(pname)
+                if (!g) { g = new Map(); groups.set(pname, g) }
+                g.set(pid, (g.get(pid) ?? 0n) + w)
+            }
+            return [...groups.values()].sort((a, b) => {
+                let wa = 0n, wb = 0n
+                for (const v of a.values()) wa += v
+                for (const v of b.values()) wb += v
+                return Number(wb - wa)
+            })
+        },
+    }
+
+    const total = graph.values[0] ?? 0n
+    const tree = buildTree(callerView, rootSet, maxLines)
+    const lines: string[] = []
+    renderTree(tree, total, "callers", "", "", lines)
+    return `Callers of "${graph.getDisplayName(resolvedNodeId)}" in "${name}" (${instances.length.toLocaleString()} instances, ${lines.length} lines):\n${lines.join("\n")}`
+}
+
 function toolDeleteGraph(graphId: number): string {
     if (!graphMap.has(graphId)) {
         return `Graph ${graphId} not found. Available IDs: ${[...graphMap.keys()].join(", ")}`
@@ -652,83 +824,26 @@ function toolSubtreeSummary(graphId: number, nodeId: number, maxLines = 40): str
         return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`
     }
 
+    const forwardView: WeightedTree<number> = {
+        displayName(n) { return graph.getDisplayName(n) },
+        weight(n) { return graph.values[n] ?? 0n },
+        selfWeight(n) {
+            let self = graph.values[n] ?? 0n
+            for (const c of graph.getChildren(n)) self -= graph.values[c] ?? 0n
+            return self
+        },
+        childCount(n) { return graph.getChildren(n).length },
+        sortedChildren(n) {
+            return Array.from(graph.getChildren(n))
+                .sort((a, b) => Number((graph.values[b] ?? 0n) - (graph.values[a] ?? 0n)))
+        },
+        nodeId(n) { return n },
+    }
+
     const total = graph.values[0] ?? 0n
-
-    interface SummaryNode {
-        nid: number
-        displayName: string
-        value: bigint
-        selfValue: bigint
-        totalChildren: number
-        children: SummaryNode[]
-    }
-
-    // Pass 1: recursive budget allocation, builds a lightweight tree.
-    function visit(nid: number, budget: number): SummaryNode {
-        const value = graph.values[nid] ?? 0n
-        let selfValue = value
-        const children = Array.from(graph.getChildren(nid))
-        for (const child of children) {
-            selfValue -= graph.values[child] ?? 0n
-        }
-
-        const node: SummaryNode = {
-            nid,
-            displayName: graph.getDisplayName(nid),
-            value,
-            selfValue,
-            totalChildren: children.length,
-            children: [],
-        }
-
-        if (children.length === 0 || budget <= 1) return node
-
-        children.sort((a, b) => Number((graph.values[b] ?? 0n) - (graph.values[a] ?? 0n)))
-
-        let weightLeft = Number(value - selfValue)
-        let budgetLeft = budget - 1
-        for (const child of children) {
-            if (budgetLeft <= 0 || weightLeft <= 0) break
-            const childValue = Number(graph.values[child] ?? 0n)
-            const alloc = Math.ceil(childValue / weightLeft * budgetLeft)
-            weightLeft -= childValue
-            if (alloc === 0) continue
-            const childNode = visit(child, alloc)
-            budgetLeft -= countNodes(childNode)
-            node.children.push(childNode)
-        }
-
-        return node
-    }
-
-    function countNodes(node: SummaryNode): number {
-        let count = 1
-        for (const child of node.children) {
-            count += countNodes(child)
-        }
-        return count
-    }
-
-    // Pass 2: render the tree with correct box-drawing prefixes.
-    function render(node: SummaryNode, ownPrefix: string, childPrefix: string, lines: string[]): void {
-        const selfStr = node.selfValue > 0n ? `, self: ${formatSamples(node.selfValue, total)}` : ""
-        const childStr = node.totalChildren > 0 ? `, children: ${node.totalChildren}` : ""
-        lines.push(`${ownPrefix}[${node.nid}] ${node.displayName}, ${formatSamples(node.value, total)}${selfStr}${childStr}`)
-        for (let i = 0; i < node.children.length; i++) {
-            const isLast = i === node.children.length - 1
-            render(
-                node.children[i]!,
-                childPrefix + (isLast ? "└─ " : "├─ "),
-                childPrefix + (isLast ? "   " : "│  "),
-                lines,
-            )
-        }
-    }
-
-    const tree = visit(nodeId, maxLines)
+    const tree = buildTree(forwardView, nodeId, maxLines)
     const lines: string[] = []
-    render(tree, "", "", lines)
-
+    renderTree(tree, total, "children", "", "", lines)
     return `Subtree summary of [${nodeId}] in "${name}" (${lines.length} lines):\n${lines.join("\n")}`
 }
 
@@ -794,14 +909,15 @@ const TOOLS = [
     },
     {
         name: "icicle_graph",
-        description: "Create an inverted (icicle) graph rooted at the given node — leaves become wide root nodes. Returns the ID of the new graph.",
+        description: "Create an inverted (icicle) graph rooted at the given node — leaves become wide root nodes. Provide either root_node_id or pattern (regex — uses the highest-sample match). Returns the ID of the new graph.",
         inputSchema: {
             type: "object",
             properties: {
                 graph_id: { type: "number", description: "Source graph ID" },
-                root_node_id: { type: "number", description: "Node ID to use as the root of the icicle graph" },
+                root_node_id: { type: "number", description: "Node ID to use as the root (mutually exclusive with pattern)" },
+                pattern: { type: "string", description: "Case-insensitive regex — the highest-sample matching node is used as root (mutually exclusive with root_node_id)" },
             },
-            required: ["graph_id", "root_node_id"],
+            required: ["graph_id"],
         },
     },
     {
@@ -840,6 +956,20 @@ const TOOLS = [
                 max_lines: { type: "number", description: "Maximum number of output lines (default 40)" },
             },
             required: ["graph_id", "node_id"],
+        },
+    },
+    {
+        name: "callers",
+        description: "Show the caller hierarchy of a function, aggregated across all instances. Like subtree_summary but in reverse — walks up the call stack. Provide either node_id or pattern (regex — uses the highest-sample match). Useful for answering 'who calls X and why?'",
+        inputSchema: {
+            type: "object",
+            properties: {
+                graph_id: { type: "number", description: "Graph ID from list_graphs" },
+                node_id: { type: "number", description: "Node whose name to look up callers for (mutually exclusive with pattern)" },
+                pattern: { type: "string", description: "Case-insensitive regex — the highest-sample matching node's name is used (mutually exclusive with node_id)" },
+                max_lines: { type: "number", description: "Maximum number of output lines (default 40)" },
+            },
+            required: ["graph_id"],
         },
     },
     {
@@ -929,8 +1059,9 @@ function handleMessage(line: string): void {
                 text = toolAggregateByName(args.graph_id, args.node_id, args.pattern)
             } else if (toolName === "icicle_graph") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
-                if (args.root_node_id == null) { respondError(id, -32602, "Missing required argument: root_node_id"); return }
-                text = toolIcicleGraph(args.graph_id, args.root_node_id)
+                if (args.root_node_id == null && !args.pattern) { respondError(id, -32602, "Either root_node_id or pattern must be provided"); return }
+                if (args.root_node_id != null && args.pattern) { respondError(id, -32602, "root_node_id and pattern are mutually exclusive"); return }
+                text = toolIcicleGraph(args.graph_id, args.root_node_id, args.pattern)
             } else if (toolName === "raw_name") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
@@ -943,6 +1074,11 @@ function handleMessage(line: string): void {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
                 text = toolSubtreeSummary(args.graph_id, args.node_id, args.max_lines)
+            } else if (toolName === "callers") {
+                if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
+                if (args.node_id == null && !args.pattern) { respondError(id, -32602, "Either node_id or pattern must be provided"); return }
+                if (args.node_id != null && args.pattern) { respondError(id, -32602, "node_id and pattern are mutually exclusive"); return }
+                text = toolCallers(args.graph_id, args.node_id, args.pattern, args.max_lines)
             } else if (toolName === "delete_graph") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 text = toolDeleteGraph(args.graph_id)

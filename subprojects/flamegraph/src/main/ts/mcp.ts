@@ -655,7 +655,7 @@ function toolIcicleGraph(graphId: number, rootNodeId?: number, pattern?: string)
     return `Created icicle graph [${entry.id}] "${entry.name}" with ${newGraph.nodeCount.toLocaleString()} nodes, root node: 0.`
 }
 
-function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null = null): string {
+function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null = null, maxLines = 40, collapse = true): string {
     const resolved = resolveGraph(graphId)
     if (typeof resolved === "string") {
         return resolved
@@ -707,9 +707,10 @@ function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null 
     }
 
     // Collapse consecutive frames with the same inclusive value (pass-through wrappers).
+    // Stop when we hit the line limit.
     const lines: string[] = []
     let i = 0
-    while (i < path.length) {
+    while (i < path.length && lines.length < maxLines) {
         const { nodeId: nid, value } = path[i]!
         let self = value
         for (const child of graph.getChildren(nid)) {
@@ -719,9 +720,18 @@ function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null 
 
         // Count how many subsequent frames have the same value.
         let j = i + 1
-        while (j < path.length && path[j]!.value === value) j++
+        if (collapse) {
+            while (j < path.length && path[j]!.value === value) j++
+        }
         const skipped = j - i - 1
-        if (skipped > 0) {
+        if (skipped === 1 && lines.length < maxLines) {
+            const mid = path[i + 1]!
+            let midSelf = mid.value
+            for (const child of graph.getChildren(mid.nodeId)) {
+                midSelf -= graph.values[child] ?? 0n
+            }
+            lines.push(`  [${mid.nodeId}] ${graph.getDisplayName(mid.nodeId)}  total: ${formatSamples(mid.value, total)}  self: ${formatSamples(midSelf, total)}`)
+        } else if (skipped > 1 && lines.length + 1 < maxLines) {
             const last = path[j - 1]!
             let lastSelf = last.value
             for (const child of graph.getChildren(last.nodeId)) {
@@ -732,7 +742,8 @@ function toolHotPath(graphId: number, nodeId: number, depthLimit: number | null 
         }
         i = j
     }
-    return `Hot path from [${nodeId}] in "${name}" (${path.length} nodes, ${lines.length} lines shown${depthNote}):\n${lines.join("\n")}`
+    const truncNote = i < path.length ? ` (truncated at ${maxLines} lines)` : ""
+    return `Hot path from [${nodeId}] in "${name}" (${path.length} nodes, ${lines.length} lines shown${depthNote}${truncNote}):\n${lines.join("\n")}`
 }
 
 function toolRawName(graphId: number, nodeId: number): string {
@@ -953,13 +964,15 @@ const TOOLS = [
     },
     {
         name: "hot_path",
-        description: "Follow the highest-sample child at each level to find the hot path from a node down to the hottest leaf.",
+        description: "Follow the highest-sample child at each level to find the hot path from a node down to the hottest leaf. Consecutive pass-through frames with identical totals are collapsed.",
         inputSchema: {
             type: "object",
             properties: {
                 graph_id: { type: "number", description: "Graph ID from list_graphs" },
                 node_id: { type: "number", description: "Starting node ID" },
                 depth_limit: { type: "number", description: "Maximum depth to follow (default: unlimited)" },
+                max_lines: { type: "number", description: "Maximum number of output lines (default 40)" },
+                collapse: { type: "boolean", description: "Collapse consecutive frames with identical totals (default true)" },
             },
             required: ["graph_id", "node_id"],
         },
@@ -1088,7 +1101,7 @@ function handleMessage(line: string): void {
             } else if (toolName === "hot_path") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
-                text = toolHotPath(args.graph_id, args.node_id, args.depth_limit ?? null)
+                text = toolHotPath(args.graph_id, args.node_id, args.depth_limit ?? null, args.max_lines, args.collapse)
             } else if (toolName === "subtree_summary") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }

@@ -11,7 +11,7 @@ import {
     wasm_icicle_graph,
     wasm_merge_children,
 } from "@flamegraph-wasm"
-import { Graph, nodeCount } from "./stackGraph.ts"
+import { StackGraph, nodeCount } from "./stackGraph.ts"
 
 // __WASM_BASE64__ is injected at build time by the Vite plugin via esbuild define.
 declare const __WASM_BASE64__: string
@@ -23,7 +23,7 @@ for (let i = 0; i < binaryStr.length; i++) {
 }
 initSync({ module: wasmBuf.buffer })
 
-function wasmGraphToGraph(wg: WasmStackGraph): Graph {
+function wasmGraphToGraph(wg: WasmStackGraph): StackGraph {
     const raw = {
         childrenOffsets: wg.children_offsets(),
         childrenData: wg.children_data(),
@@ -34,7 +34,7 @@ function wasmGraphToGraph(wg: WasmStackGraph): Graph {
         values: wg.values(),
     }
     wg.free()
-    return new Graph(raw)
+    return new StackGraph(raw)
 }
 
 const NEWLINE_BYTE = 0x0a
@@ -82,7 +82,7 @@ class Base64Decoder {
 /** Decode a base64 stream → decompress (deflate-raw) → parse into a Graph. */
 async function parseGraph(
     base64Source: ReadableStream<Buffer>,
-): Promise<Graph> {
+): Promise<StackGraph> {
     const decoder = new Base64Decoder()
     const ds = new DecompressionStream("deflate-raw")
     const writer = ds.writable.getWriter()
@@ -133,7 +133,7 @@ async function parseGraph(
  */
 async function* readEmbeddedStacks(): AsyncGenerator<{
     name: string
-    graph: Graph
+    graph: StackGraph
 }> {
     const scriptPath = process.argv[1]
     if (!scriptPath) {
@@ -155,7 +155,7 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
     // In STREAMING_DATA state, base64 chunks are pushed into this controller.
     // parseGraph reads from the corresponding ReadableStream.
     let dataController: ReadableStreamDefaultController<Buffer> | null = null
-    let graphPromise: Promise<Graph> | null = null
+    let graphPromise: Promise<StackGraph> | null = null
 
     for await (const rawChunk of createReadStream(scriptPath)) {
         const chunk = rawChunk as Buffer
@@ -269,13 +269,13 @@ function formatSamples(n: bigint, total: bigint): string {
 interface GraphEntry {
     id: number
     name: string
-    graph: Graph
+    graph: StackGraph
 }
 
 const graphMap = new Map<number, GraphEntry>()
 let nextGraphId = 0
 
-function registerGraph(name: string, graph: Graph): GraphEntry {
+function registerGraph(name: string, graph: StackGraph): GraphEntry {
     const id = nextGraphId++
     const entry = { id, name, graph }
     graphMap.set(id, entry)
@@ -294,7 +294,7 @@ function resolveGraph(graphId: number): GraphEntry | string {
 }
 
 /** Build a parent map: result[i] = parent node ID, or -1 for root. */
-function buildParentMap(graph: Graph): Int32Array {
+function buildParentMap(graph: StackGraph): Int32Array {
     const n = graph.nodeCount
     const parent = new Int32Array(n).fill(-1)
     for (let i = 0; i < n; i++) {
@@ -306,7 +306,7 @@ function buildParentMap(graph: Graph): Int32Array {
 }
 
 /** Resolve a node ID from either a direct node_id or a regex pattern (picks highest-sample match). */
-function resolveNodeByIdOrPattern(graph: Graph, name: string, nodeId?: number, pattern?: string): number | string {
+function resolveNodeByIdOrPattern(graph: StackGraph, name: string, nodeId?: number, pattern?: string): number | string {
     if (nodeId != null) {
         if (nodeId < 0 || nodeId >= graph.nodeCount) {
             return `Node ID ${nodeId} out of range (0–${graph.nodeCount - 1}).`

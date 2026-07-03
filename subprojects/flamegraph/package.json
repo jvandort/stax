@@ -16,7 +16,8 @@
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vite-plugin-run": "^0.9.0",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^4.1.9"
   },
   "dependencies": {
     "fflate": "^0.8.3",

@@ -1,12 +1,14 @@
 import { useCallback } from "react"
 import type { GraphState, RunJob } from "./useGraphTabs"
-import { getGraph, removeGraph, storeGraph } from "./graphStore"
+import { getGraph } from "./graphStore"
+import { type GraphLike, StackGraph } from "./stackGraph"
 
 export function useGraphMutation(
     updateGraphState: (
         id: string,
         updater: (prev: GraphState) => GraphState,
     ) => void,
+    replaceTabGraph: (oldId: string, newGraph: GraphLike) => void,
     runJob: RunJob,
 ) {
     const setMutable = useCallback(
@@ -17,9 +19,10 @@ export function useGraphMutation(
     )
 
     const deleteNode = useCallback(
-        async (tabId: string, graphId: string, nodeId: number) => {
-            const graph = getGraph(graphId)
+        async (tabId: string, nodeId: number) => {
+            const graph = getGraph(tabId)
             if (!graph) return
+            if (!(graph instanceof StackGraph)) throw new Error("Not supported for diff graphs")
             const result = await runJob(
                 "deleteNode",
                 {
@@ -31,16 +34,11 @@ export function useGraphMutation(
                 },
                 [],
             )
-            if ("result" in result) {
-                const newGraphId = storeGraph(result.result.graph)
-                removeGraph(graphId)
-                updateGraphState(tabId, (gs) => ({
-                    ...gs,
-                    graphId: newGraphId,
-                }))
+            if ("result" in result && "graph" in result.result) {
+                replaceTabGraph(tabId, new StackGraph(result.result.graph))
             }
         },
-        [updateGraphState, runJob],
+        [replaceTabGraph, runJob],
     )
 
     return { setMutable, deleteNode }

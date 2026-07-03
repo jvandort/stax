@@ -1,34 +1,80 @@
-import React, { useRef } from "react"
-import { Stack } from "./containers"
+import React, { useRef, useState } from "react"
+import { Row, Stack } from "./containers"
+import { getGraph } from "./graphStore"
+import { DiffGraph } from "./stackGraph"
 
 export const GraphPicker: React.FC<{
-    tabIds: string[]
+    tabs: { id: string; name: string }[]
     selectedTab: string | null
     onSelectTab: (id: string) => void
     onDeleteTab: (id: string) => void
     onFileSelected: (file: File) => void
-}> = ({ tabIds, selectedTab, onSelectTab, onDeleteTab, onFileSelected }) => {
+    onDiff: (aTabId: string, bTabId: string) => void
+}> = ({
+    tabs,
+    selectedTab,
+    onSelectTab,
+    onDeleteTab,
+    onFileSelected,
+    onDiff,
+}) => {
     const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const [diffBaseId, setDiffBaseId] = useState<string | null>(null)
+
+    // Diffing a diff makes no sense — diff tabs can be neither the base nor
+    // the target of another diff.
+    const isDiffTab = (id: string) => getGraph(id) instanceof DiffGraph
+    const diffableTabs = tabs.filter(({ id }) => !isDiffTab(id))
 
     return (
         <Stack style={{ gap: 15 }}>
             <Stack style={{ gap: 5 }}>
-                {tabIds.map((id) => (
-                    <button
-                        key={id}
-                        style={{ textAlign: "left", overflow: "hidden", textOverflow: "ellipsis" }}
-                        aria-pressed={selectedTab === id}
-                        title={id}
-                        onMouseDown={(e) => {
-                            if (e.button === 1) {
-                                e.preventDefault()
-                                onDeleteTab(id)
-                            }
-                        }}
-                        onClick={() => onSelectTab(id)}
-                    >
-                        {id}
-                    </button>
+                {tabs.map(({ id, name }) => (
+                    <Row key={id} style={{ gap: 4 }}>
+                        <button
+                            style={{
+                                textAlign: "left",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                flex: 1,
+                            }}
+                            aria-pressed={selectedTab === id}
+                            title={name}
+                            onMouseDown={(e) => {
+                                if (e.button === 1) {
+                                    e.preventDefault()
+                                    onDeleteTab(id)
+                                }
+                            }}
+                            onClick={() => onSelectTab(id)}
+                        >
+                            {name}
+                        </button>
+                        {diffBaseId === id ? (
+                            <button onClick={() => setDiffBaseId(null)}>
+                                Cancel
+                            </button>
+                        ) : diffBaseId !== null ? (
+                            <button
+                                onClick={() => {
+                                    onDiff(diffBaseId, id)
+                                    setDiffBaseId(null)
+                                }}
+                                disabled={isDiffTab(id)}
+                            >
+                                With
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => setDiffBaseId(id)}
+                                disabled={
+                                    isDiffTab(id) || diffableTabs.length < 2
+                                }
+                            >
+                                Diff
+                            </button>
+                        )}
+                    </Row>
                 ))}
             </Stack>
             <button onClick={() => fileInputRef.current?.click()}>

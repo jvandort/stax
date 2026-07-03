@@ -1,13 +1,15 @@
-import { decodeBase64 } from "./encoding.ts"
+import {decodeBase64} from "./encoding.ts"
 import {
     StacksParser,
     wasm_delete_node,
+    wasm_diff_graphs,
     wasm_icicle_graph,
     wasm_merge_children,
+    wasm_simplify_graph,
     WasmStackGraph,
 } from "@flamegraph-wasm"
-import type { StackGraph } from "./stackGraph"
-import { nodeCount } from "./stackGraph"
+import type {DiffGraphData, StackGraphData} from "./stackGraph"
+import {nodeCount} from "./stackGraph"
 
 /**
  * Extract typed arrays from a WasmStackGraph and free the Rust-owned memory.
@@ -15,7 +17,7 @@ import { nodeCount } from "./stackGraph"
  * linear memory into it. These typed arrays can then be zero-copy transferred to
  * the DOM thread.
  */
-export const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraph => {
+export const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraphData => {
     const childrenOffsets = wg.children_offsets()
     const childrenData = wg.children_data()
     const namesData = wg.names_data()
@@ -37,7 +39,7 @@ export const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraph => {
 
 export const processStream = async (
     stream: ReadableStream<Uint8Array>,
-): Promise<StackGraph> => {
+): Promise<StackGraphData> => {
     const parser = new StacksParser("root")
     const reader = stream.getReader()
     while (true) {
@@ -54,7 +56,7 @@ export const processStream = async (
 
 export const parseEncodedData = async (
     encodedData: string,
-): Promise<StackGraph> => {
+): Promise<StackGraphData> => {
     const CHUNK_SIZE_BYTES = 1024 * 1024
     const encoded = decodeBase64(encodedData)
 
@@ -82,9 +84,9 @@ export const parseEncodedData = async (
 }
 
 export const mergeChildren = (
-    graph: StackGraph,
+    graph: StackGraphData,
     nodeName: string,
-): StackGraph => {
+): StackGraphData => {
     const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
         graph
     return wasmGraphToStackGraph(
@@ -99,7 +101,7 @@ export const mergeChildren = (
     )
 }
 
-export const icicleGraph = (graph: StackGraph, nodeId: number): StackGraph => {
+export const icicleGraph = (graph: StackGraphData, nodeId: number): StackGraphData => {
     const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
         graph
     return wasmGraphToStackGraph(
@@ -115,7 +117,7 @@ export const icicleGraph = (graph: StackGraph, nodeId: number): StackGraph => {
     )
 }
 
-export const deleteNode = (graph: StackGraph, nodeId: number): StackGraph => {
+export const deleteNode = (graph: StackGraphData, nodeId: number): StackGraphData => {
     const {
         childrenOffsets,
         childrenData,
@@ -137,4 +139,38 @@ export const deleteNode = (graph: StackGraph, nodeId: number): StackGraph => {
             nodeId,
         ),
     )
+}
+
+export const simplifyGraph = (graph: StackGraphData, nodeId: number): StackGraphData => {
+    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
+        graph
+    const wasmGraph = wasm_simplify_graph(
+        childrenOffsets,
+        childrenData,
+        namesData,
+        namesOffsets,
+        values,
+        nodeId,
+    )
+    return wasmGraphToStackGraph(wasmGraph)
+}
+
+
+export const diffGraphs = (a: StackGraphData, b: StackGraphData): DiffGraphData => {
+    const wasmResult = wasm_diff_graphs(
+        a.childrenOffsets,
+        a.childrenData,
+        a.namesData,
+        a.namesOffsets,
+        a.values,
+        b.childrenOffsets,
+        b.childrenData,
+        b.namesData,
+        b.namesOffsets,
+        b.values,
+    )
+    const aValues = wasmResult.a_values()
+    const bValues = wasmResult.b_values()
+    const graph = wasmGraphToStackGraph(wasmResult.into_graph())
+    return { graph, aValues, bValues }
 }

@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { Flamegraph } from "./Flamegraph"
-import { COORDINATE_WIDTH } from "./FlamegraphNode"
+import {
+    COORDINATE_WIDTH,
+    DEFAULT_DIFF_RENDER_OPTIONS,
+    type DiffRenderOptions,
+} from "./FlamegraphNode"
 import { RangeSlider } from "./Sliders"
 import { Row, Stack } from "./containers.tsx"
 import type { ColorSettings } from "./color"
@@ -38,10 +42,13 @@ const App = (): React.JSX.Element => {
         selectedTab,
         setSelectedTab,
         updateGraphState,
+        replaceTabGraph,
         deleteTab,
         submitJob,
         showMergedSubgraph,
         showIcicleGraph,
+        showSimplifiedGraph,
+        diffGraphs,
     } = useGraphTabs()
 
     const [embeddedStacks, setEmbeddedStacks] = useState<EmbeddedStack[]>([])
@@ -183,6 +190,7 @@ const App = (): React.JSX.Element => {
 
     const { setMutable, deleteNode } = useGraphMutation(
         updateGraphState,
+        replaceTabGraph,
         runJob,
     )
 
@@ -209,6 +217,8 @@ const App = (): React.JSX.Element => {
     })
 
     const [openPanel, setOpenPanel] = useState<OpenPanel>("graphs")
+    const [diffRenderOptions, setDiffRenderOptions] =
+        useState<DiffRenderOptions>(DEFAULT_DIFF_RENDER_OPTIONS)
     const togglePanel = (panel: Exclude<OpenPanel, null>) =>
         setOpenPanel((current) => (current === panel ? null : panel))
 
@@ -233,7 +243,7 @@ const App = (): React.JSX.Element => {
 
     return (
         <Flamegraph
-            graphId={graphState?.graphId}
+            graphId={selectedTab}
             rootNode={rootNode}
             setRootNode={(nodeId) =>
                 selectedTab && setRootNode(selectedTab, nodeId)
@@ -245,9 +255,7 @@ const App = (): React.JSX.Element => {
             }
             isMutable={graphState?.mutable ?? false}
             onDeleteNode={(nodeId) =>
-                selectedTab &&
-                graphState &&
-                deleteNode(selectedTab, graphState.graphId, nodeId)
+                selectedTab && deleteNode(selectedTab, nodeId)
             }
             colorSettings={colorSettings}
             initialScrollTop={
@@ -255,6 +263,7 @@ const App = (): React.JSX.Element => {
             }
             onScrollChange={handleScrollChange}
             searchQuery={searchQuery || undefined}
+            diffRenderOptions={diffRenderOptions}
         >
             {/* Wrapper provides the positioning context for the center overlay,
                 spanning the full flamegraph area including the range slider. */}
@@ -363,7 +372,12 @@ const App = (): React.JSX.Element => {
                             >
                                 {openPanel === "graphs" && (
                                     <GraphPicker
-                                        tabIds={[...allTabData.keys()]}
+                                        tabs={[...allTabData.entries()].map(
+                                            ([id, state]) => ({
+                                                id,
+                                                name: state.name,
+                                            }),
+                                        )}
                                         selectedTab={selectedTab}
                                         onSelectTab={setSelectedTab}
                                         onDeleteTab={deleteTab}
@@ -376,6 +390,7 @@ const App = (): React.JSX.Element => {
                                             )
                                             setSelectedTab(file.name)
                                         }}
+                                        onDiff={diffGraphs}
                                     />
                                 )}
                                 {openPanel === "colors" && (
@@ -410,7 +425,10 @@ const App = (): React.JSX.Element => {
                                 setRootNode={setRootNode}
                                 showMergedSubgraph={showMergedSubgraph}
                                 showIcicleGraph={showIcicleGraph}
+                                showSimplifiedGraph={showSimplifiedGraph}
                                 setMutable={setMutable}
+                                diffRenderOptions={diffRenderOptions}
+                                onChangeDiffRenderOptions={setDiffRenderOptions}
                             />
                         </Stack>
 
@@ -447,7 +465,7 @@ const App = (): React.JSX.Element => {
                             </Row>
                             {searchOpen && (
                                 <SearchPanel
-                                    graphId={graphState?.graphId}
+                                    graphId={selectedTab}
                                     rootNode={rootNode}
                                     searchQuery={searchQuery}
                                     onSearchQueryChange={setSearchQuery}

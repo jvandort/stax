@@ -5,8 +5,10 @@ import {
     mergeChildren,
     icicleGraph,
     deleteNode,
+    simplifyGraph,
+    diffGraphs
 } from "./wasmBridge.ts"
-import type { StackGraph } from "./stackGraph"
+import type { DiffGraphData, StackGraphData } from "./stackGraph"
 
 let resolveWasmReady: () => void
 const wasmReady = new Promise<void>((resolve) => {
@@ -30,20 +32,32 @@ export interface ParseStreamJob {
 
 export interface MergeChildrenJob {
     nodeName: string
-    graph: StackGraph
+    graph: StackGraphData
     type: "mergeChildren"
 }
 
 export interface IcicleGraphJob {
     nodeId: number
-    graph: StackGraph
+    graph: StackGraphData
     type: "icicleGraph"
 }
 
 export interface DeleteNodeJob {
     nodeId: number
-    graph: StackGraph
+    graph: StackGraphData
     type: "deleteNode"
+}
+
+export interface SimplifyGraphJob {
+    nodeId: number
+    graph: StackGraphData
+    type: "simplifyGraph"
+}
+
+export interface DiffGraphsJob {
+    graphA: StackGraphData
+    graphB: StackGraphData
+    type: "diffGraphs"
 }
 
 export type Job =
@@ -53,14 +67,16 @@ export type Job =
     | MergeChildrenJob
     | IcicleGraphJob
     | DeleteNodeJob
+    | SimplifyGraphJob
+    | DiffGraphsJob
 
 export interface WorkerParams {
     job: Job
 }
 
-export interface WorkerResult {
-    graph: StackGraph
-}
+export type WorkerResult =
+    | { graph: StackGraphData }
+    | { diffGraph: DiffGraphData }
 
 export interface WorkerSuccess {
     result: WorkerResult
@@ -75,6 +91,16 @@ export interface WorkerFailure {
 
 export type WorkerResponse = WorkerSuccess | WorkerFailure
 
+const stackGraphTransferables = (g: StackGraphData): Transferable[] => [
+    g.childrenOffsets.buffer,
+    g.childrenData.buffer,
+    g.namesData.buffer,
+    g.namesOffsets.buffer,
+    g.displayNamesData.buffer,
+    g.displayNamesOffsets.buffer,
+    g.values.buffer,
+]
+
 const process = async (job: Job): Promise<WorkerResult> => {
     if (job.type == "parseStream") {
         return { graph: await processStream(job.stream) }
@@ -86,6 +112,10 @@ const process = async (job: Job): Promise<WorkerResult> => {
         return { graph: await parseEncodedData(job.encodedData) }
     } else if (job.type == "deleteNode") {
         return { graph: deleteNode(job.graph, job.nodeId) }
+    } else if (job.type == "simplifyGraph") {
+        return { graph: simplifyGraph(job.graph, job.nodeId) }
+    } else if (job.type == "diffGraphs") {
+        return { diffGraph: diffGraphs(job.graphA, job.graphB) }
     }
 
     throw new Error("Unknown job type")
@@ -124,16 +154,16 @@ self.onmessage = async (event: MessageEvent<WorkerParams>) => {
 
     const response = await tryProcess(event.data.job)
     if ("result" in response) {
-        const g = response.result.graph
-        self.postMessage(response, [
-            g.childrenOffsets.buffer,
-            g.childrenData.buffer,
-            g.namesData.buffer,
-            g.namesOffsets.buffer,
-            g.displayNamesData.buffer,
-            g.displayNamesOffsets.buffer,
-            g.values.buffer,
-        ])
+        const result = response.result
+        if ("graph" in result) {
+            self.postMessage(response, stackGraphTransferables(result.graph))
+        } else {
+            self.postMessage(response, [
+                ...stackGraphTransferables(result.diffGraph.graph),
+                result.diffGraph.aValues.buffer,
+                result.diffGraph.bValues.buffer,
+            ])
+        }
     } else {
         self.postMessage(response, [])
     }

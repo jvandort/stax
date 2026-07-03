@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef } from "react"
 import { Row, Stack } from "./containers"
 import { getGraph } from "./graphStore"
+import { DiffGraph, StackGraph } from "./stackGraph"
+import type { GraphLike } from "./stackGraph"
 import { TopKHeap } from "./topKHeap"
 
 export const SearchPanel: React.FC<{
@@ -23,7 +25,18 @@ export const SearchPanel: React.FC<{
         inputRef.current?.focus()
     }, [])
 
-    const graph = graphId != null ? (getGraph(graphId) ?? null) : null
+    const graph: GraphLike | null =
+        graphId != null ? (getGraph(graphId) ?? null) : null
+
+    const getNodeValue = (i: number): bigint | null => {
+        if (graph instanceof StackGraph) {
+            return graph.values[i] ?? null
+        }
+        if (graph instanceof DiffGraph) {
+            return (graph.valuesA[i] ?? 0n) + (graph.valuesB[i] ?? 0n)
+        }
+        return null
+    }
 
     // When the user has drilled into a subtree, restrict search to that subtree.
     // At the true root (node 0) we skip the traversal and search everything.
@@ -55,7 +68,7 @@ export const SearchPanel: React.FC<{
             if (subtreeIds !== null && !subtreeIds.has(i)) {
                 continue
             }
-            const value = graph.values[i]
+            const value = getNodeValue(i)
             if (value == null) {
                 continue
             }
@@ -68,7 +81,7 @@ export const SearchPanel: React.FC<{
         return heap.toSortedArray()
     }, [graph, subtreeIds, searchQuery])
 
-    const maxValue = (graph && (graph.values[rootNode] ?? graph.values[0])) || 1n
+    const maxValue = getNodeValue(rootNode) ?? getNodeValue(0) ?? 1n
 
     return (
         <Stack style={{ gap: 5, flex: 1, minHeight: 0 }}>

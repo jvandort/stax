@@ -75,7 +75,12 @@ This serves a live development version of the app at http://localhost:5173/
 ./gradlew :flamegraph:cargoTest
 ```
 
-Rust tests also run automatically as part of `./gradlew :flamegraph:check`.
+**TypeScript (vitest, in `src/test/ts`):**
+```
+./gradlew :flamegraph:tsTest
+```
+
+Both test suites also run automatically as part of `./gradlew :flamegraph:check`.
 
 **TypeScript (type check):**
 ```

@@ -8,12 +8,17 @@ import React, {
     useState,
 } from "react"
 import { getGraph } from "./graphStore"
-import type { Graph } from "./stackGraph"
+import { DiffGraph, StackGraph } from "./stackGraph"
 import { Stack } from "./containers"
 import type { ColorSettings } from "./color"
 import {
     drawFlamegraph,
+    type DiffRenderOptions,
+    DEFAULT_DIFF_RENDER_OPTIONS,
+    getFullWidthChild,
+    getMeasure,
     getSameWidthChain,
+    hasRenderableContent,
     nodeDetails,
     type RenderedNode,
     COLLAPSE_THRESHOLD,
@@ -133,6 +138,7 @@ export const Flamegraph: React.FC<{
     onScrollChange?: (scrollTop: number) => void
     /** Highlights nodes whose raw name contains this string. */
     searchQuery?: string
+    diffRenderOptions?: DiffRenderOptions
     children?: React.ReactNode
 }> = ({
     graphId,
@@ -147,9 +153,13 @@ export const Flamegraph: React.FC<{
     initialScrollTop,
     onScrollChange,
     searchQuery,
+    diffRenderOptions = DEFAULT_DIFF_RENDER_OPTIONS,
     children,
 }) => {
-    const graph = graphId != null ? (getGraph(graphId) ?? null) : null
+    const graph = (graphId != null ? (getGraph(graphId) ?? null) : null) as
+        | StackGraph
+        | DiffGraph
+        | null
     const scrollContainerRef = useRef<HTMLDivElement | null>(null)
     const nodeDetailsRef = useRef<HTMLSpanElement | null>(null)
     const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null)
@@ -164,35 +174,43 @@ export const Flamegraph: React.FC<{
     // threshold dependency means canvasHeight doesn't change during zoom,
     // so the scroll container stays stable while panning/zooming.
     const maxDepth = useMemo(() => {
-        if (!graph || graph.values.length === 0) return 0
-        const rootValue = graph.values[rootNode]
-        if (!rootValue || rootValue === 0n) return 0
+        if (!graph || graph.nodeCount === 0) return 0
+        if (!hasRenderableContent(graph, rootNode, diffRenderOptions)) return 0
 
         let max = 0
-        const stack: Array<[number, number, bigint | null]> = [
-            [rootNode, 1, null],
-        ]
+        // [nodeId, depth, isFullWidthChild] — a node filling its parent
+        // exactly is part of the parent's chain and never collapses itself.
+        const stack: Array<[number, number, boolean]> = [[rootNode, 1, false]]
 
         while (stack.length > 0) {
-            const [nodeId, depth, parentValue] = stack.pop()!
+            const [nodeId, depth, isFullWidthChild] = stack.pop()!
             if (depth > max) max = depth
 
-            const value = graph.values[nodeId]!
-            const chain = getSameWidthChain(nodeId, graph)
-            const isCollapsible =
-                chain.length >= COLLAPSE_THRESHOLD && value !== parentValue
-            const isCollapsed = isCollapsible && !expandedNodes.has(nodeId)
-            const children = isCollapsed
-                ? graph.getChildren(chain[chain.length - 1]!)
-                : graph.getChildren(nodeId)
+            const chain = isFullWidthChild
+                ? null
+                : getSameWidthChain(nodeId, graph, diffRenderOptions)
+            const isCollapsed =
+                chain != null &&
+                chain.length >= COLLAPSE_THRESHOLD &&
+                !expandedNodes.has(nodeId)
+            const source = isCollapsed ? chain[chain.length - 1]! : nodeId
+            // When collapsed, the chain tail has no full-width child by
+            // definition (the chain would have continued otherwise).
+            const fullWidthChild = isCollapsed
+                ? -1
+                : chain != null
+                  ? (chain[0] ?? -1)
+                  : getFullWidthChild(graph, nodeId, diffRenderOptions)
 
-            for (const childId of children) {
-                stack.push([childId, depth + 1, value])
+            for (const childId of graph.getChildren(source)) {
+                if (getMeasure(graph, childId, diffRenderOptions) <= 0n)
+                    continue
+                stack.push([childId, depth + 1, childId === fullWidthChild])
             }
         }
 
         return max
-    }, [graph, rootNode, expandedNodes])
+    }, [graph, rootNode, expandedNodes, diffRenderOptions])
 
     const canvasHeight = Math.max(NODE_HEIGHT, maxDepth * NODE_HEIGHT)
 
@@ -205,11 +223,18 @@ export const Flamegraph: React.FC<{
         initialScrollTop,
     )
 
+    // Tracks the live scroll position synchronously. Used to save a mode's
+    // position at the moment of a mode switch, before the new mode's canvas
+    // height has clamped or shifted container.scrollTop.
+    const liveScrollTopRef = useRef(0)
+
     useEffect(() => {
         const el = scrollEl
-        if (!el || !onScrollChange) return
+        if (!el) return
         let timer: number
         const handleScroll = () => {
+            liveScrollTopRef.current = el.scrollTop
+            if (!onScrollChange) return
             clearTimeout(timer)
             timer = window.setTimeout(() => onScrollChange(el.scrollTop), 100)
         }
@@ -220,12 +245,52 @@ export const Flamegraph: React.FC<{
         }
     }, [scrollEl, onScrollChange])
 
+    // --- Per-render-mode scroll memory ---
+    //
+    // The canvas height differs between diff render modes, so without this
+    // the viewport jumps on every mode switch. Each mode remembers its own
+    // scroll position. Swapped signed views reuse the opposite view's key:
+    // Slower-swapped shows exactly the frames of Faster-unswapped, so its
+    // scroll position is the right one to restore.
+    const scrollModeKey = (options: DiffRenderOptions): string => {
+        if (options.mode === "delta" || !options.swapped) return options.mode
+        return options.mode === "regressions" ? "improvements" : "regressions"
+    }
+    const modeKey = scrollModeKey(diffRenderOptions)
+    const scrollByModeRef = useRef(new Map<string, number>())
+    const lastModeKeyRef = useRef(modeKey)
+    const lastScrollGraphIdRef = useRef(graphId)
+
+    // Declared after useScrollAnchor so this wins when both react to the
+    // same mode-switch commit.
+    useLayoutEffect(() => {
+        const container = scrollContainerRef.current
+        if (!container) return
+        if (graphId !== lastScrollGraphIdRef.current) {
+            // New graph: positions saved for another tab are meaningless.
+            scrollByModeRef.current.clear()
+            lastScrollGraphIdRef.current = graphId
+            lastModeKeyRef.current = modeKey
+            return
+        }
+        if (modeKey === lastModeKeyRef.current) return
+        scrollByModeRef.current.set(
+            lastModeKeyRef.current,
+            liveScrollTopRef.current,
+        )
+        lastModeKeyRef.current = modeKey
+        // Default to the bottom (the root) for a mode not yet visited.
+        container.scrollTop =
+            scrollByModeRef.current.get(modeKey) ?? container.scrollHeight
+        liveScrollTopRef.current = container.scrollTop
+    }, [graphId, modeKey])
+
     // --- Ref-based draw state ---
     //
     // These refs hold the latest draw parameters so that zoom and hover can
     // trigger immediate canvas redraws without going through React state.
     const drawParamsRef = useRef<{
-        graph: Graph | null | undefined
+        graph: StackGraph | DiffGraph | null | undefined
         rootNode: number
         viewLeft: number
         viewRight: number
@@ -234,6 +299,7 @@ export const Flamegraph: React.FC<{
         hoveredName: string | null
         hoveredCollapseNodeId: number | null
         searchQuery: string | undefined
+        diffRenderOptions: DiffRenderOptions
     }>({
         graph,
         rootNode,
@@ -244,6 +310,7 @@ export const Flamegraph: React.FC<{
         hoveredName: null,
         hoveredCollapseNodeId: null,
         searchQuery,
+        diffRenderOptions,
     })
 
     const hitListRef = useRef<RenderedNode[]>([])
@@ -274,6 +341,7 @@ export const Flamegraph: React.FC<{
             p.hoveredName,
             p.hoveredCollapseNodeId,
             p.searchQuery,
+            p.diffRenderOptions,
         )
     }, [])
 
@@ -334,6 +402,7 @@ export const Flamegraph: React.FC<{
         drawParamsRef.current.expandedNodes = expandedNodes
         drawParamsRef.current.colorSettings = colorSettings
         drawParamsRef.current.searchQuery = searchQuery
+        drawParamsRef.current.diffRenderOptions = diffRenderOptions
         redraw()
     }, [
         graph,
@@ -343,6 +412,7 @@ export const Flamegraph: React.FC<{
         expandedNodes,
         colorSettings,
         searchQuery,
+        diffRenderOptions,
         redraw,
     ])
 
@@ -498,8 +568,7 @@ export const Flamegraph: React.FC<{
     const handleMouseMove: React.MouseEventHandler<HTMLCanvasElement> = (e) => {
         const hit = hitTest(e.clientX, e.clientY)
         const newName = hit && !hit.isCollapseToggle ? hit.name : null
-        const newCollapseNodeId =
-            hit?.isCollapseToggle ? hit.nodeId : null
+        const newCollapseNodeId = hit?.isCollapseToggle ? hit.nodeId : null
 
         const canvas = canvasRef.current
         if (canvas) {
@@ -510,7 +579,11 @@ export const Flamegraph: React.FC<{
             nodeDetailsRef.current.textContent =
                 hit && !hit.isCollapseToggle
                     ? drawParamsRef.current.graph
-                        ? nodeDetails(hit.nodeId, drawParamsRef.current.graph)
+                        ? nodeDetails(
+                              hit.nodeId,
+                              drawParamsRef.current.graph,
+                              drawParamsRef.current.diffRenderOptions,
+                          )
                         : ""
                     : "Hover for details, click to zoom"
         }
@@ -548,6 +621,23 @@ export const Flamegraph: React.FC<{
             clearHover()
         }
     }
+
+    // A diff can legitimately have nothing to render (e.g. a zero net delta
+    // at this root while subtrees shifted in offsetting directions) — say so
+    // instead of showing a blank canvas.
+    const emptyDiffMessage = (() => {
+        if (!(graph instanceof DiffGraph) || graph.nodeCount === 0) return null
+        if (hasRenderableContent(graph, rootNode, diffRenderOptions))
+            return null
+        switch (diffRenderOptions.mode) {
+            case "delta":
+                return "No net delta at this root — the Slower/Faster views show offsetting changes"
+            case "regressions":
+                return "Nothing got slower under this root"
+            case "improvements":
+                return "Nothing got faster under this root"
+        }
+    })()
 
     const handleMouseDown: React.MouseEventHandler<HTMLCanvasElement> = (e) => {
         if (e.button !== 1) return
@@ -605,6 +695,20 @@ export const Flamegraph: React.FC<{
                     overflow: "hidden",
                 }}
             >
+                {emptyDiffMessage != null && (
+                    <div
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            opacity: 0.5,
+                        }}
+                    >
+                        {emptyDiffMessage}
+                    </div>
+                )}
                 <Stack wide style={{ flex: 1, minHeight: 0 }}>
                     {children}
                 </Stack>

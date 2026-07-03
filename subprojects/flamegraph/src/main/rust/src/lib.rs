@@ -1,7 +1,10 @@
 use wasm_bindgen::prelude::*;
 
 mod builder;
-pub(crate) use builder::GraphBuilder;
+pub(crate) use builder::{DiffBuilder, GraphBuilder};
+
+mod diff;
+pub use diff::wasm_diff_graphs;
 
 mod delete;
 pub use delete::wasm_delete_node;
@@ -16,6 +19,9 @@ mod parser;
 pub use parser::StacksParser;
 #[cfg(test)]
 pub use parser::parse_stacks_impl;
+
+mod simplify;
+pub use simplify::wasm_simplify_graph;
 
 #[wasm_bindgen(start)]
 pub fn main_js() {
@@ -110,5 +116,38 @@ impl WasmStackGraph {
 
     pub fn values(&self) -> Vec<i64> {
         self.values.clone()
+    }
+}
+
+/// The result of a diff computation.
+///
+/// `graph.values` holds the bottom-up diff values: `|b - a|` at each leaf,
+/// summed up through internal nodes. This is the value used to determine
+/// node widths in diff render mode — nodes whose entire subtree is identical
+/// get a diff value of zero and are not rendered.
+///
+/// `a_values` and `b_values` hold the original per-node sample counts from
+/// each input graph, used for coloring (red = more in A, green = more in B).
+#[wasm_bindgen]
+pub struct WasmDiffGraph {
+    pub(crate) graph: WasmStackGraph,
+    pub(crate) a_values: Vec<i64>,
+    pub(crate) b_values: Vec<i64>,
+}
+
+#[wasm_bindgen]
+impl WasmDiffGraph {
+    /// Sample counts from graph A, indexed by node ID.
+    pub fn a_values(&self) -> Vec<i64> {
+        self.a_values.clone()
+    }
+
+    /// Sample counts from graph B, indexed by node ID.
+    pub fn b_values(&self) -> Vec<i64> {
+        self.b_values.clone()
+    }
+
+    pub fn into_graph(self) -> WasmStackGraph {
+        self.graph
     }
 }

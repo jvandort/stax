@@ -313,6 +313,20 @@ abstract class NpxCmdlineTask : NpxTask() {
 
 tasks.register<NpxCmdlineTask>("npx")
 
+val tsTest = tasks.register<NpxTask>("tsTest") {
+    dependsOn(tasks.npmInstall)
+    command.set("vitest")
+    args.set(listOf("run"))
+    inputs.dir("src/main/ts")
+    inputs.dir("src/test/ts")
+    inputs.file("vitest.config.ts")
+    outputs.upToDateWhen { false }
+}
+
+tasks.check {
+    dependsOn(tsTest)
+}
+
 tasks.register<NpxTask>("serve") {
     command.set("npx")
     dependsOn(compileRust)

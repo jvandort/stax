@@ -109,17 +109,14 @@ export function nodeCount(graph: StackGraphData): number {
 /**
  * Wire format for a diff of two stack graphs.
  *
- * `graph.values` holds bottom-up `|b - a|` values computed by the WASM diff.
- * The renderer no longer uses them; all rendering measures are derived
- * client-side from `aValues`/`bValues` (see the derived getters on DiffGraph).
- *
- * `aValues` and `bValues` hold the original per-node inclusive sample counts
- * from each input graph.
+ * `graph` is the merged graph, whose `values` hold graph A's per-node
+ * inclusive sample counts; `diffValues` holds graph B's. All rendering
+ * measures are derived client-side from the two count arrays (see the
+ * derived getters on DiffGraph).
  */
 export interface DiffGraphData {
     graph: StackGraphData
-    aValues: BigInt64Array
-    bValues: BigInt64Array
+    diffValues: BigInt64Array
 }
 
 interface DiffDerived {
@@ -143,8 +140,8 @@ export class DiffGraph implements GraphLike {
 
     constructor(data: DiffGraphData) {
         this.inner = new StackGraph(data.graph)
-        this.valuesA = data.aValues
-        this.valuesB = data.bValues
+        this.valuesA = data.graph.values
+        this.valuesB = data.diffValues
     }
 
     get nodeCount(): number {

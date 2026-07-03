@@ -102,11 +102,10 @@ fn diff_simplified(a: &WasmStackGraph, b: &WasmStackGraph) -> WasmDiffGraph {
     builder.build()
 }
 
-/// Simplifies both input graphs and aligns them by call path, producing a diff graph where:
-/// - `a_values` / `b_values` contain each graph's inclusive sample counts
-///   (0 for call paths absent on that side).
-/// - `graph.values` contains bottom-up diff values: `|b - a|` at leaves,
-///   summed through internal nodes.
+/// Simplifies both input graphs and aligns them by call path, producing a diff graph
+/// carrying each side's inclusive sample counts (0 for call paths absent on that
+/// side): graph A's in the inner graph's `values` array, graph B's in `b_values`.
+/// All diff measures are derived from the two count arrays client-side.
 ///
 /// Nodes that exist in both graphs are merged into a single node; nodes present
 /// in only one graph appear with the other side's count as 0.
@@ -153,18 +152,11 @@ mod tests {
     }
 
     #[test]
-    fn test_identical_graphs_have_zero_diff_values() {
-        let data = b"a;b 10\na;c 5\n";
-        let g = diff(data, data);
-        // All leaves are identical, so all diff values (including internal nodes) are 0.
-        assert!(g.graph.values.iter().all(|&v| v == 0));
-    }
-
-    #[test]
     fn test_identical_graphs_preserve_a_and_b_values() {
         let data = b"a;b 10\na;c 5\n";
         let g = diff(data, data);
-        assert_eq!(g.a_values, g.b_values);
+        // Graph A's counts ride in the inner graph's values array.
+        assert_eq!(g.graph.values, g.b_values);
     }
 
     #[test]
@@ -172,10 +164,8 @@ mod tests {
         let g = diff(b"a;b 10\n", b"a;c 5\n");
         let names = node_names(&g);
         let b_idx = names.iter().position(|n| n == "b").unwrap();
-        assert_eq!(g.a_values[b_idx], 10);
-        assert_eq!(g.b_values[b_idx], 0);
-        // Leaf only in A: diff value = |0 - 10| = 10.
         assert_eq!(g.graph.values[b_idx], 10);
+        assert_eq!(g.b_values[b_idx], 0);
     }
 
     #[test]
@@ -183,10 +173,8 @@ mod tests {
         let g = diff(b"a;b 10\n", b"a;c 5\n");
         let names = node_names(&g);
         let c_idx = names.iter().position(|n| n == "c").unwrap();
-        assert_eq!(g.a_values[c_idx], 0);
+        assert_eq!(g.graph.values[c_idx], 0);
         assert_eq!(g.b_values[c_idx], 5);
-        // Leaf only in B: diff value = |5 - 0| = 5.
-        assert_eq!(g.graph.values[c_idx], 5);
     }
 
     #[test]
@@ -194,24 +182,7 @@ mod tests {
         let g = diff(b"a;b 10\n", b"a;b 7\n");
         let names = node_names(&g);
         let b_idx = names.iter().position(|n| n == "b").unwrap();
-        assert_eq!(g.a_values[b_idx], 10);
+        assert_eq!(g.graph.values[b_idx], 10);
         assert_eq!(g.b_values[b_idx], 7);
-        // Leaf changed: diff value = |7 - 10| = 3.
-        assert_eq!(g.graph.values[b_idx], 3);
-    }
-
-    #[test]
-    fn test_internal_node_diff_is_sum_of_leaf_diffs() {
-        // a is root, b and c are children of a.
-        // b: A=60, B=40 (diff=20); c: A=40, B=60 (diff=20).
-        // a's diff value should be 40, even though a's own A==B (both 100).
-        let g = diff(b"a;b 60\na;c 40\n", b"a;b 40\na;c 60\n");
-        let names = node_names(&g);
-        let a_idx = names.iter().position(|n| n == "a").unwrap();
-        let b_idx = names.iter().position(|n| n == "b").unwrap();
-        let c_idx = names.iter().position(|n| n == "c").unwrap();
-        assert_eq!(g.graph.values[b_idx], 20);
-        assert_eq!(g.graph.values[c_idx], 20);
-        assert_eq!(g.graph.values[a_idx], 40);
     }
 }

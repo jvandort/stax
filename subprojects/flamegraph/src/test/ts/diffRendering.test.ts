@@ -94,7 +94,8 @@ const buildGraphData = (): StackGraphData => {
         childrenData: new Int32Array(childrenFlat),
         namesData,
         namesOffsets,
-        values: new BigInt64Array(n),
+        // Graph A's sample counts ride in the merged graph's values array.
+        values: new BigInt64Array(A.map(BigInt)),
         displayNamesData: namesData,
         displayNamesOffsets: namesOffsets,
     }
@@ -102,8 +103,7 @@ const buildGraphData = (): StackGraphData => {
 
 const graph = new DiffGraph({
     graph: buildGraphData(),
-    aValues: new BigInt64Array(A.map(BigInt)),
-    bValues: new BigInt64Array(B.map(BigInt)),
+    diffValues: new BigInt64Array(B.map(BigInt)),
 })
 
 const opts = (o: Partial<DiffRenderOptions>): DiffRenderOptions => ({

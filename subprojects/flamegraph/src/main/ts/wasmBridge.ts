@@ -169,8 +169,7 @@ export const diffGraphs = (a: StackGraphData, b: StackGraphData): DiffGraphData 
         b.namesOffsets,
         b.values,
     )
-    const aValues = wasmResult.a_values()
-    const bValues = wasmResult.b_values()
+    const diffValues = wasmResult.b_values()
     const graph = wasmGraphToStackGraph(wasmResult.into_graph())
-    return { graph, aValues, bValues }
+    return { graph, diffValues }
 }

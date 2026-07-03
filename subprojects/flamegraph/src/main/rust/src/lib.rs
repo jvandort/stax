@@ -119,30 +119,20 @@ impl WasmStackGraph {
     }
 }
 
-/// The result of a diff computation.
-///
-/// `graph.values` holds the bottom-up diff values: `|b - a|` at each leaf,
-/// summed up through internal nodes. This is the value used to determine
-/// node widths in diff render mode — nodes whose entire subtree is identical
-/// get a diff value of zero and are not rendered.
-///
-/// `a_values` and `b_values` hold the original per-node sample counts from
-/// each input graph, used for coloring (red = more in A, green = more in B).
+/// The result of a diff computation: the merged graph, whose `values` array
+/// holds graph A's per-node inclusive sample counts, with graph B's counts
+/// alongside in `b_values`. All diff measures (deltas, widths, colors) are
+/// derived from the two count arrays client-side.
 #[wasm_bindgen]
 pub struct WasmDiffGraph {
     pub(crate) graph: WasmStackGraph,
-    pub(crate) a_values: Vec<i64>,
     pub(crate) b_values: Vec<i64>,
 }
 
 #[wasm_bindgen]
 impl WasmDiffGraph {
-    /// Sample counts from graph A, indexed by node ID.
-    pub fn a_values(&self) -> Vec<i64> {
-        self.a_values.clone()
-    }
-
     /// Sample counts from graph B, indexed by node ID.
+    /// Graph A's counts are the inner graph's `values` array.
     pub fn b_values(&self) -> Vec<i64> {
         self.b_values.clone()
     }

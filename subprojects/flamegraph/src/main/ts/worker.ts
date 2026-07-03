@@ -160,8 +160,7 @@ self.onmessage = async (event: MessageEvent<WorkerParams>) => {
         } else {
             self.postMessage(response, [
                 ...stackGraphTransferables(result.diffGraph.graph),
-                result.diffGraph.aValues.buffer,
-                result.diffGraph.bValues.buffer,
+                result.diffGraph.diffValues.buffer,
             ])
         }
     } else {

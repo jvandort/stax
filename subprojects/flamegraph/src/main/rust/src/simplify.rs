@@ -121,6 +121,26 @@ fn strip_generated_accessor_id(name: &str) -> Option<String> {
     ANCHORS.iter().find_map(|anchor| strip_digits_after(name, anchor))
 }
 
+/// Strips the numbering from Java synthetic accessor methods:
+/// `org.example.Outer.access$200(org.example.Outer)` →
+/// `org.example.Outer.access$(org.example.Outer)`. javac numbers `access$N`
+/// bridges in member-declaration order, so adding or reordering private
+/// members renumbers unrelated accessors between two versions of the code.
+/// The digit run must span the rest of the method name (up to the parameter
+/// list or frame-type suffix), so real methods like `access$getFoo` are kept.
+fn strip_synthetic_accessor_id(name: &str) -> Option<String> {
+    let pos = name.find(".access$")? + ".access$".len();
+    let digits = name[pos..].bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &name[pos + digits..];
+    if !rest.is_empty() && !rest.starts_with('(') && rest != frame_type(name) {
+        return None;
+    }
+    Some(format!("{}{}", &name[..pos], rest))
+}
+
 /// Strips the line-number segment from JFR-converted frames:
 /// `org.example.Foo.bar(int, int):42_[j]` → `org.example.Foo.bar(int, int)_[j]`.
 /// The line number is where the sampled instruction sits within the method,
@@ -141,11 +161,12 @@ fn strip_line_number(name: &str) -> Option<String> {
 /// Applies all name-normalization rules to a frame name, in order.
 /// Each rule returns `Some(new_name)` when it changed something.
 fn simplify_name(name: &str) -> Cow<'_, str> {
-    const RULES: [fn(&str) -> Option<String>; 6] = [
+    const RULES: [fn(&str) -> Option<String>; 7] = [
         strip_lambda_form_id,
         strip_lambda_class_id,
         strip_dynamic_proxy_id,
         strip_generated_accessor_id,
+        strip_synthetic_accessor_id,
         strip_line_number,
         normalize_frame_type,
     ];
@@ -186,6 +207,9 @@ fn frame_type(name: &str) -> &str {
 ///   `GeneratedMethodAccessor42.invoke(...)` → `GeneratedMethodAccessor.invoke(...)`
 ///   (likewise `GeneratedConstructorAccessor` and
 ///   `GeneratedSerializationConstructorAccessor`).
+/// - Synthetic accessor methods lose their numbering:
+///   `Outer.access$200(...)` → `Outer.access$(...)`, since javac renumbers
+///   them whenever private members are added or reordered.
 /// - JFR-converted frames lose their line number: `Foo.bar(int):42_[j]` →
 ///   `Foo.bar(int)_[j]`, merging samples taken at different points in a method.
 /// - A same-named direct parent/child pair whose raw frame types differ is a
@@ -351,6 +375,16 @@ mod tests {
                 "jdk.internal.reflect.GeneratedSerializationConstructorAccessor3.newInstance(java.lang.Object[]):-1_[j]",
                 "jdk.internal.reflect.GeneratedSerializationConstructorAccessor.newInstance(java.lang.Object[])_[j]",
             ),
+            // Synthetic accessor numbering (JFR and async-profiler forms).
+            (
+                "org.example.Outer.access$200(org.example.Outer):-1_[j]",
+                "org.example.Outer.access$(org.example.Outer)_[j]",
+            ),
+            ("org/example/Outer.access$000_[j]", "org/example/Outer.access$_[j]"),
+            ("org/example/Outer.access$000", "org/example/Outer.access$"),
+            // Kotlin-style or user-defined access$ names are not pure digit runs and are kept.
+            ("org/example/Outer.access$getFoo$p_[j]", "org/example/Outer.access$getFoo$p_[j]"),
+            ("org/example/Outer.access$1getFoo_[j]", "org/example/Outer.access$1getFoo_[j]"),
             // Rules compose: lambda id + line number + compilation tier.
             (
                 "org.foo.Class$$Lambda$9+0xdead.123.get():42_[0]",
@@ -412,6 +446,13 @@ mod tests {
         let expected = "jdk.internal.reflect.GeneratedMethodAccessor.invoke(java.lang.Object, java.lang.Object[])_[j]";
         assert_eq!(count(&g, expected), 1);
         assert_eq!(value(&g, expected), 7);
+    }
+
+    #[test]
+    fn test_synthetic_accessors_merge() {
+        let g = simplify(b"org/ex/Outer.access$000_[j] 3\norg/ex/Outer.access$100_[j] 4\n");
+        assert_eq!(count(&g, "org/ex/Outer.access$_[j]"), 1, "{:?}", node_names(&g));
+        assert_eq!(value(&g, "org/ex/Outer.access$_[j]"), 7);
     }
 
     #[test]

@@ -4,8 +4,8 @@ An interactive flamegraph visualizer for async-profiler and JVM stack traces. St
 in the browser with no server — the entire application ships as a single self-contained `index.html` file.
 
 This application supports a number of features:
-- Embedding `-stacks.txt` files directly into the `index.html` file
-- Loading `-stacks.txt` files at runtime
+- Embedding `-stacks.txt` and `.jfr` files directly into the `index.html` file
+- Loading `-stacks.txt` and `.jfr` files at runtime
 - Displaying multiple stacks files
 - Icicle graph generation
 - Merging stack entries with the same name
@@ -26,13 +26,17 @@ data processing logic is implemented in Rust and compiled to a WASM binary. This
 into the web application and loaded at runtime. The Rust entry-point is `src/main/rust/src/lib.rs`.
 
 The final web application is packaged as a single file, `index.html`, in `build/vite`. This file
-supports embedding DEFLATE-compressed, Base64-encoded `-stacks.txt` sample files. On startup, the
-embedded stacks files are decoded and decompressed before further processing. The application also
-supports loading additional stacks files at runtime using a file picker.
+supports embedding DEFLATE-compressed, Base64-encoded profile files — `-stacks.txt` sample files
+or `.jfr` recordings. On startup, the embedded files are decoded and decompressed before
+further processing. Entries named `*.jfr` are decoded as JFR recordings (producing one graph per
+sample kind present, e.g. cpu and wall). Everything else is parsed as `stacks.txt` files. The
+application also supports loading additional stacks or JFR files at runtime using file pickers.
 
 The resulting `index.html` is embedded as a resource in a small Java wrapper application, which
-accepts a list of stacks files as input, compresses and encodes them, and injects them into an
+accepts a list of profile files as input, compresses and encodes them, and injects them into an
 output `index.html`. The Java entry-point is `FlamegraphGenerator.java` in `src/main/java/`.
+Generate a demo with e.g.
+`./gradlew :flamegraph:buildDemo --stacks "/abs/path/profile-stacks.txt /abs/path/recording.jfr"`.
 
 ## Managed Toolchains
 

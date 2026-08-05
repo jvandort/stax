@@ -1,12 +1,15 @@
 import init from "@flamegraph-wasm"
 import {
     parseEncodedData,
+    parseEncodedJfr,
+    processJfrStream,
     processStream,
     mergeChildren,
     icicleGraph,
     deleteNode,
     simplifyGraph,
-    diffGraphs
+    diffGraphs,
+    type NamedGraph,
 } from "./wasmBridge.ts"
 import type { DiffGraphData, StackGraphData } from "./stackGraph"
 
@@ -28,6 +31,16 @@ export interface InitWorkerJob {
 export interface ParseStreamJob {
     stream: ReadableStream<Uint8Array>
     type: "parseStream"
+}
+
+export interface ParseJfrJob {
+    stream: ReadableStream<Uint8Array>
+    type: "parseJfr"
+}
+
+export interface ParseEncodedJfrJob {
+    encodedData: string
+    type: "parseEncodedJfr"
 }
 
 export interface MergeChildrenJob {
@@ -63,6 +76,8 @@ export interface DiffGraphsJob {
 export type Job =
     | InitWorkerJob
     | ParseStreamJob
+    | ParseJfrJob
+    | ParseEncodedJfrJob
     | ParseEncodedDataJob
     | MergeChildrenJob
     | IcicleGraphJob
@@ -76,6 +91,7 @@ export interface WorkerParams {
 
 export type WorkerResult =
     | { graph: StackGraphData }
+    | { graphs: NamedGraph[] }
     | { diffGraph: DiffGraphData }
 
 export interface WorkerSuccess {
@@ -104,6 +120,10 @@ const stackGraphTransferables = (g: StackGraphData): Transferable[] => [
 const process = async (job: Job): Promise<WorkerResult> => {
     if (job.type == "parseStream") {
         return { graph: await processStream(job.stream) }
+    } else if (job.type == "parseJfr") {
+        return { graphs: await processJfrStream(job.stream) }
+    } else if (job.type == "parseEncodedJfr") {
+        return { graphs: await parseEncodedJfr(job.encodedData) }
     } else if (job.type == "mergeChildren") {
         return { graph: mergeChildren(job.graph, job.nodeName) }
     } else if (job.type == "icicleGraph") {
@@ -157,6 +177,13 @@ self.onmessage = async (event: MessageEvent<WorkerParams>) => {
         const result = response.result
         if ("graph" in result) {
             self.postMessage(response, stackGraphTransferables(result.graph))
+        } else if ("graphs" in result) {
+            self.postMessage(
+                response,
+                result.graphs.flatMap(({ graph }) =>
+                    stackGraphTransferables(graph),
+                ),
+            )
         } else {
             self.postMessage(response, [
                 ...stackGraphTransferables(result.diffGraph.graph),

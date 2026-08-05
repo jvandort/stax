@@ -21,10 +21,13 @@ import java.util.stream.Collectors;
 import java.util.zip.Deflater;
 
 /**
- * Generates a self-contained flamegraph HTML file by embedding stacks data into
- * the application bundle template. Stacks files are gzip-compressed and Base64-encoded
- * inline as {@code <template>} elements, allowing the viewer standalone from disk without
- * a server.
+ * Generates a self-contained flamegraph HTML file by embedding profile data into
+ * the application bundle template. Input files — stacks (.txt) or JFR
+ * recordings (.jfr) — are deflate-compressed and Base64-encoded inline as
+ * {@code <template>} elements, allowing the viewer standalone from disk without
+ * a server. The viewer routes each embedded entry by its file extension: .jfr
+ * entries are decoded natively in the browser, everything else is parsed as
+ * stacks.txt files.
  */
 public class FlamegraphGenerator {
 
@@ -46,15 +49,15 @@ public class FlamegraphGenerator {
     private static final String FLAMEGRAPH_HTML_TEMPLATE_PATH = "/com/jvandort/stax/index.html";
 
     /**
-     * Command-line entry point. Accepts one or more absolute stacks file paths followed by
-     * the destination path as the final argument.
+     * Command-line entry point. Accepts one or more absolute stacks or JFR file paths
+     * followed by the destination path as the final argument.
      *
-     * @param args absolute stacks file paths followed by the output destination path
+     * @param args absolute stacks/JFR file paths followed by the output destination path
      * @throws IOException if an I/O error occurs
      */
     public static void main(String... args) throws IOException {
         if (args.length < 2) {
-            throw new IllegalArgumentException("Usage: FlamegraphGenerator <stacks-file>... <destination>");
+            throw new IllegalArgumentException("Usage: FlamegraphGenerator <stacks-or-jfr-file>... <destination>");
         }
         List<Path> stacksFiles = Arrays.stream(args, 0, args.length - 1)
             .map(Path::of)
@@ -65,9 +68,10 @@ public class FlamegraphGenerator {
 
     /**
      * Generates a self-contained flamegraph HTML file at {@code destination} by embedding
-     * the given stacks files into the application bundle template.
+     * the given profile files into the application bundle template.
      *
-     * @param stacksFiles absolute paths to the stacks files to embed; must have distinct file names
+     * @param stacksFiles absolute paths to the stacks/JFR files to embed; must have
+     *                    distinct file names, and JFR recordings must be named *.jfr
      * @param destination path of the output HTML file to create
      */
     public void generate(List<Path> stacksFiles, Path destination) throws IOException {

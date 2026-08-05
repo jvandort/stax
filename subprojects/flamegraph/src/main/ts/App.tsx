@@ -45,6 +45,8 @@ const App = (): React.JSX.Element => {
         replaceTabGraph,
         deleteTab,
         submitJob,
+        openJfrFile,
+        openEncodedJfr,
         showMergedSubgraph,
         showIcicleGraph,
         showSimplifiedGraph,
@@ -63,11 +65,22 @@ const App = (): React.JSX.Element => {
     // we can re-submit to the healthy new pool.
     const embeddedStacksRef = useRef<EmbeddedStack[]>([])
 
+    const loadEmbeddedStack = useCallback(
+        (name: string, encodedData: string) => {
+            if (name.endsWith(".jfr")) {
+                void openEncodedJfr(name, encodedData)
+            } else {
+                submitJob(name, { type: "parseEncodedData", encodedData }, [])
+            }
+        },
+        [submitJob, openEncodedJfr],
+    )
+
     useEffect(() => {
         if (embeddedStacksRef.current.length > 0) {
             // Second invocation (strict mode): re-submit to the new worker pool.
             embeddedStacksRef.current.forEach(({ name, encodedData }) => {
-                submitJob(name, { type: "parseEncodedData", encodedData }, [])
+                loadEmbeddedStack(name, encodedData)
             })
             return
         }
@@ -95,12 +108,12 @@ const App = (): React.JSX.Element => {
             return { name, encodedData }
         })
         stacks.forEach(({ name, encodedData }) => {
-            submitJob(name, { type: "parseEncodedData", encodedData }, [])
+            loadEmbeddedStack(name, encodedData)
         })
         embeddedStacksRef.current = stacks
         setEmbeddedStacks(stacks)
         namesEl.remove()
-    }, [submitJob])
+    }, [loadEmbeddedStack])
 
     const handleMcpDownload = useCallback(async () => {
         if (embeddedStacks.length === 0) {
@@ -282,7 +295,7 @@ const App = (): React.JSX.Element => {
                 >
                     {!selectedTab && (
                         <div style={{ opacity: 0.5 }}>
-                            Load a -stacks.txt file to begin
+                            Load a -stacks.txt or .jfr file to begin
                         </div>
                     )}
                     {selectedTabData?.progress && (
@@ -388,6 +401,10 @@ const App = (): React.JSX.Element => {
                                                 { type: "parseStream", stream },
                                                 [stream],
                                             )
+                                            setSelectedTab(file.name)
+                                        }}
+                                        onJfrSelected={(file) => {
+                                            void openJfrFile(file)
                                             setSelectedTab(file.name)
                                         }}
                                         onDiff={diffGraphs}

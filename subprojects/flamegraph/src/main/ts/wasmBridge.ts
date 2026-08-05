@@ -1,5 +1,6 @@
 import {decodeBase64} from "./encoding.ts"
 import {
+    JfrParser,
     StacksParser,
     wasm_delete_node,
     wasm_diff_graphs,
@@ -54,14 +55,52 @@ export const processStream = async (
     return wasmGraphToStackGraph(parser.finish())
 }
 
-export const parseEncodedData = async (
-    encodedData: string,
-): Promise<StackGraphData> => {
+export interface NamedGraph {
+    name: string
+    graph: StackGraphData
+}
+
+/**
+ * Decode a streamed JFR recording into one graph per sample kind it contains:
+ * "cpu" (execution/native-method samples) and "wall" (async-profiler 4.0
+ * wall-clock samples). The parser folds each complete JFR chunk as it
+ * arrives, so peak memory is one JFR chunk (~12MB by default) rather than the
+ * whole recording. Throws when the file is malformed or contains no
+ * supported sample events.
+ */
+export const processJfrStream = async (
+    stream: ReadableStream<Uint8Array>,
+): Promise<NamedGraph[]> => {
+    const parser = new JfrParser()
+    const reader = stream.getReader()
+    while (true) {
+        const { done, value } = await reader.read()
+        if (value) {
+            parser.feed(value)
+        }
+        if (done) {
+            break
+        }
+    }
+    const result = parser.finish()
+    const graphs: NamedGraph[] = []
+    for (let i = 0; i < result.count(); i++) {
+        graphs.push({
+            name: result.kind(i),
+            graph: wasmGraphToStackGraph(result.take_graph(i)),
+        })
+    }
+    result.free()
+    return graphs
+}
+
+/** Base64 deflate-raw payload (the embedded-data encoding) → decompressed byte stream. */
+const decodeEncodedData = (encodedData: string): ReadableStream<Uint8Array> => {
     const CHUNK_SIZE_BYTES = 1024 * 1024
     const encoded = decodeBase64(encodedData)
 
     let position = 0
-    const stream = new ReadableStream<Uint8Array>({
+    return new ReadableStream<Uint8Array>({
         pull(controller) {
             if (position >= encoded.length) {
                 controller.close()
@@ -79,9 +118,17 @@ export const parseEncodedData = async (
             Uint8Array
         >,
     )
-
-    return await processStream(stream)
 }
+
+export const parseEncodedData = async (
+    encodedData: string,
+): Promise<StackGraphData> => {
+    return await processStream(decodeEncodedData(encodedData))
+}
+
+/** Decode an embedded (base64 deflate-raw) JFR recording. */
+export const parseEncodedJfr = (encodedData: string): Promise<NamedGraph[]> =>
+    processJfrStream(decodeEncodedData(encodedData))
 
 export const mergeChildren = (
     graph: StackGraphData,

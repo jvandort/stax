@@ -6,6 +6,7 @@ import { createReadStream } from "node:fs"
 import { createInterface } from "node:readline"
 import {
     initSync,
+    JfrParser,
     StacksParser,
     WasmStackGraph,
     wasm_icicle_graph,
@@ -79,36 +80,41 @@ class Base64Decoder {
     }
 }
 
+/**
+ * Feed a base64 stream through decode into a decompressor's writer (runs
+ * concurrently with the consumer's read loop via microtask interleaving).
+ */
+async function feedBase64(
+    base64Source: ReadableStream<Buffer>,
+    writer: WritableStreamDefaultWriter<BufferSource>,
+): Promise<void> {
+    const decoder = new Base64Decoder()
+    const reader = base64Source.getReader()
+    while (true) {
+        const { done, value } = await reader.read()
+        if (value) {
+            const decoded = decoder.decode(value)
+            if (decoded.length > 0) {
+                await writer.write(decoded as Uint8Array<ArrayBuffer>)
+            }
+        }
+        if (done) {
+            break
+        }
+    }
+    const flushed = decoder.flush()
+    if (flushed.length > 0) {
+        await writer.write(flushed as Uint8Array<ArrayBuffer>)
+    }
+    await writer.close()
+}
+
 /** Decode a base64 stream → decompress (deflate-raw) → parse into a Graph. */
 async function parseGraph(
     base64Source: ReadableStream<Buffer>,
 ): Promise<StackGraph> {
-    const decoder = new Base64Decoder()
     const ds = new DecompressionStream("deflate-raw")
-    const writer = ds.writable.getWriter()
-
-    // Feed base64 → decode → write to decompressor (runs concurrently with
-    // the parse loop below via microtask interleaving).
-    const feedDone = (async () => {
-        const reader = base64Source.getReader()
-        while (true) {
-            const { done, value } = await reader.read()
-            if (value) {
-                const decoded = decoder.decode(value)
-                if (decoded.length > 0) {
-                    await writer.write(decoded as Uint8Array<ArrayBuffer>)
-                }
-            }
-            if (done) {
-                break
-            }
-        }
-        const flushed = decoder.flush()
-        if (flushed.length > 0) {
-            await writer.write(flushed as Uint8Array<ArrayBuffer>)
-        }
-        await writer.close()
-    })()
+    const feedDone = feedBase64(base64Source, ds.writable.getWriter())
 
     const parser = new StacksParser("root")
     const reader = ds.readable.getReader()
@@ -124,6 +130,44 @@ async function parseGraph(
 
     await feedDone
     return wasmGraphToGraph(parser.finish())
+}
+
+/**
+ * Decode a base64 stream → decompress (deflate-raw) → decode as a JFR
+ * recording, yielding one graph per sample kind present ("cpu", "wall").
+ * The parser folds each complete JFR chunk as it arrives, so only one JFR
+ * chunk (~12MB by default) is buffered at a time.
+ */
+async function parseJfrGraphs(
+    name: string,
+    base64Source: ReadableStream<Buffer>,
+): Promise<{ name: string; graph: StackGraph }[]> {
+    const ds = new DecompressionStream("deflate-raw")
+    const feedDone = feedBase64(base64Source, ds.writable.getWriter())
+
+    const parser = new JfrParser()
+    const reader = ds.readable.getReader()
+    while (true) {
+        const { done, value } = await reader.read()
+        if (value) {
+            parser.feed(value)
+        }
+        if (done) {
+            break
+        }
+    }
+    await feedDone
+
+    const result = parser.finish()
+    const graphs: { name: string; graph: StackGraph }[] = []
+    for (let i = 0; i < result.count(); i++) {
+        graphs.push({
+            name: `${name} (${result.kind(i)})`,
+            graph: wasmGraphToGraph(result.take_graph(i)),
+        })
+    }
+    result.free()
+    return graphs
 }
 
 /**
@@ -153,9 +197,10 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
     let currentName = ""
 
     // In STREAMING_DATA state, base64 chunks are pushed into this controller.
-    // parseGraph reads from the corresponding ReadableStream.
+    // parseGraph/parseJfrGraphs reads from the corresponding ReadableStream.
     let dataController: ReadableStreamDefaultController<Buffer> | null = null
-    let graphPromise: Promise<StackGraph> | null = null
+    let entriesPromise: Promise<{ name: string; graph: StackGraph }[]> | null =
+        null
 
     for await (const rawChunk of createReadStream(scriptPath)) {
         const chunk = rawChunk as Buffer
@@ -217,7 +262,12 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
                             dataController = c
                         },
                     })
-                    graphPromise = parseGraph(stream)
+                    const name = currentName
+                    entriesPromise = name.endsWith(".jfr")
+                        ? parseJfrGraphs(name, stream)
+                        : parseGraph(stream).then((graph) => [
+                              { name, graph },
+                          ])
                     state = STREAMING_DATA
                 }
             } else {
@@ -237,12 +287,9 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
                         )
                     }
                     dataController!.close()
-                    yield {
-                        name: currentName,
-                        graph: await graphPromise!,
-                    }
+                    yield* await entriesPromise!
                     dataController = null
-                    graphPromise = null
+                    entriesPromise = null
                     pos = nlIdx + 1
                     state = READING_NAME
                 }
@@ -254,10 +301,10 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
     if (
         state === STREAMING_DATA &&
         (dataController as ReadableStreamDefaultController<Buffer> | null) &&
-        graphPromise
+        entriesPromise
     ) {
         dataController!.close()
-        yield { name: currentName, graph: await graphPromise }
+        yield* await entriesPromise
     }
 }
 

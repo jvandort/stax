@@ -253,6 +253,7 @@ abstract class CargoCmdlineTask : DefaultTask() {
 tasks.register<CargoCmdlineTask>("cargo") {
     cargoHome.set(installRust.flatMap { it.cargoHome })
     rustupHome.set(installRust.flatMap { it.rustupHome })
+    buildDir.set(rustBuildDir)
     workingDir.set(rustSrcDir)
 }
 
@@ -370,7 +371,10 @@ abstract class GenerateDemoTask : DefaultTask() {
     abstract val outputFile: RegularFileProperty
 
     @get:Input
-    @get:Option(option = "stacks", description = "The stacks files to embed in the demo")
+    @get:Option(
+        option = "stacks",
+        description = "The profile files (collapsed -stacks.txt or .jfr recordings) to embed in the demo",
+    )
     abstract val stacks: Property<String>
 
     @TaskAction

@@ -12,6 +12,9 @@ pub use delete::wasm_delete_node;
 mod icicle;
 pub use icicle::wasm_icicle_graph;
 
+mod jfr;
+pub use jfr::{JfrParser, WasmJfrGraphs};
+
 mod merge;
 pub use merge::wasm_merge_children;
 

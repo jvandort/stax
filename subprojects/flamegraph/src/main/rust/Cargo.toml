@@ -17,6 +17,9 @@ ahash = { version = "0.8.12", default-features = false, features = ["std"] }
 # SIMD-accelerated byte search (scanning for newlines and semicolons during parsing).
 # default-features = false gives a no_std-compatible build with no extra overhead.
 memchr = { version = "2.8.0", default-features = false }
+# Pure-Rust JFR (Java Flight Recorder) reader, used to decode .jfr files natively.
+# Proven to work compiled to WASM in the browser (used by the jfrv viewer).
+jfrs = { version = "0.2.5", default-features = false }
 
 [profile.release]
 # "z" optimizes for binary size over runtime speed. "3" would produce faster code, but

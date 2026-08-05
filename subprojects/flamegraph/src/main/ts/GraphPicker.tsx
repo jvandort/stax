@@ -9,6 +9,7 @@ export const GraphPicker: React.FC<{
     onSelectTab: (id: string) => void
     onDeleteTab: (id: string) => void
     onFileSelected: (file: File) => void
+    onJfrSelected: (file: File) => void
     onDiff: (aTabId: string, bTabId: string) => void
 }> = ({
     tabs,
@@ -16,9 +17,11 @@ export const GraphPicker: React.FC<{
     onSelectTab,
     onDeleteTab,
     onFileSelected,
+    onJfrSelected,
     onDiff,
 }) => {
     const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const jfrInputRef = useRef<HTMLInputElement | null>(null)
     const [diffBaseId, setDiffBaseId] = useState<string | null>(null)
 
     // Diffing a diff makes no sense — diff tabs can be neither the base nor
@@ -77,9 +80,20 @@ export const GraphPicker: React.FC<{
                     </Row>
                 ))}
             </Stack>
-            <button onClick={() => fileInputRef.current?.click()}>
-                Open file...
-            </button>
+            <Row style={{ gap: 4 }}>
+                <button
+                    style={{ flex: 1 }}
+                    onClick={() => fileInputRef.current?.click()}
+                >
+                    Open Stacks
+                </button>
+                <button
+                    style={{ flex: 1 }}
+                    onClick={() => jfrInputRef.current?.click()}
+                >
+                    Open JFR
+                </button>
+            </Row>
             <input
                 type="file"
                 style={{ display: "none" }}
@@ -89,6 +103,19 @@ export const GraphPicker: React.FC<{
                     const file = e.target.files?.[0]
                     if (file) {
                         onFileSelected(file)
+                    }
+                    e.target.value = ""
+                }}
+            />
+            <input
+                type="file"
+                style={{ display: "none" }}
+                ref={jfrInputRef}
+                accept=".jfr"
+                onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) {
+                        onJfrSelected(file)
                     }
                     e.target.value = ""
                 }}

@@ -127,8 +127,10 @@ export function useGraphTabs() {
                     const workerResult = result.result
                     if ("graph" in workerResult) {
                         storeGraph(id, new StackGraph(workerResult.graph))
-                    } else {
+                    } else if ("diffGraph" in workerResult) {
                         storeGraph(id, new DiffGraph(workerResult.diffGraph))
+                    } else {
+                        throw new Error("Unexpected multi-graph worker result")
                     }
                     setTabData(id, {
                         graph: {
@@ -153,6 +155,80 @@ export function useGraphTabs() {
             }
         },
         [runJob, setTabData],
+    )
+
+    /**
+     * Runs a JFR decode job whose result is one graph per sample kind, and
+     * replaces the placeholder tab `id` with one tab per kind (e.g.
+     * "file.jfr (cpu)", "file.jfr (wall)").
+     */
+    const runJfrJob = useCallback(
+        async (id: string, job: Job, transfer: Transferable[]) => {
+            setTabData(id, { progress: "Decoding JFR..." })
+            try {
+                const result = await runJob(id, { job }, transfer)
+                if ("error" in result) {
+                    setTabData(id, { error: result.error })
+                    return
+                }
+                const workerResult = result.result
+                if (!("graphs" in workerResult)) {
+                    throw new Error("Unexpected worker result for JFR parse")
+                }
+                const tabIds = workerResult.graphs.map(({ name, graph }) => {
+                    const tabId = `${id} (${name})`
+                    storeGraph(tabId, new StackGraph(graph))
+                    return tabId
+                })
+                setAllTabData((oldData) => {
+                    const updated = new Map(oldData)
+                    updated.delete(id)
+                    for (const tabId of tabIds) {
+                        updated.set(tabId, {
+                            name: tabId,
+                            graph: {
+                                history: [
+                                    {
+                                        rootNode: 0,
+                                        viewLeft: 0,
+                                        viewRight: COORDINATE_WIDTH,
+                                    },
+                                ],
+                                historyIndex: 0,
+                            },
+                        })
+                    }
+                    return updated
+                })
+                setSelectedTab((current) =>
+                    current === id ? (tabIds[0] ?? null) : current,
+                )
+            } catch (err) {
+                setTabData(id, {
+                    error: {
+                        message:
+                            err instanceof Error ? err.message : String(err),
+                    },
+                })
+            }
+        },
+        [runJob, setTabData],
+    )
+
+    const openJfrFile = useCallback(
+        async (file: File) => {
+            const stream = file.stream()
+            await runJfrJob(file.name, { type: "parseJfr", stream }, [stream])
+        },
+        [runJfrJob],
+    )
+
+    /** Decodes an embedded (base64 deflate-raw) JFR recording into tabs. */
+    const openEncodedJfr = useCallback(
+        async (name: string, encodedData: string) => {
+            await runJfrJob(name, { type: "parseEncodedJfr", encodedData }, [])
+        },
+        [runJfrJob],
     )
 
     const showMergedSubgraph = useCallback(
@@ -236,6 +312,8 @@ export function useGraphTabs() {
         replaceTabGraph,
         deleteTab,
         submitJob,
+        openJfrFile,
+        openEncodedJfr,
         showMergedSubgraph,
         showIcicleGraph,
         showSimplifiedGraph,

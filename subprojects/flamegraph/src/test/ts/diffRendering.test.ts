@@ -196,10 +196,10 @@ describe("swap", () => {
         // sensitive to the machine's number-formatting locale.
         const loc = (v: number) => BigInt(v).toLocaleString()
         expect(nodeDetails(NODE.Mixed, graph, delta)).toBe(
-            `Mixed A: ${loc(2000)}, B: ${loc(2500)}, Δ: +${loc(500)}`,
+            `[${NODE.Mixed}] Mixed A: ${loc(2000)}, B: ${loc(2500)}, Δ: +${loc(500)}`,
         )
         expect(nodeDetails(NODE.Mixed, graph, opts({ swapped: true }))).toBe(
-            `Mixed A: ${loc(2500)}, B: ${loc(2000)}, Δ: ${loc(-500)}`,
+            `[${NODE.Mixed}] Mixed A: ${loc(2500)}, B: ${loc(2000)}, Δ: ${loc(-500)}`,
         )
     })
 })

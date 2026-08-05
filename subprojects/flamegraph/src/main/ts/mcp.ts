@@ -13,6 +13,12 @@ import {
     wasm_merge_children,
 } from "@flamegraph-wasm"
 import { StackGraph, nodeCount } from "./stackGraph.ts"
+import {
+    buildTree,
+    formatSamples,
+    renderTree,
+    type WeightedTree,
+} from "./summaryTree.ts"
 
 // __WASM_BASE64__ is injected at build time by the Vite plugin via esbuild define.
 declare const __WASM_BASE64__: string
@@ -308,11 +314,6 @@ async function* readEmbeddedStacks(): AsyncGenerator<{
     }
 }
 
-function formatSamples(n: bigint, total: bigint): string {
-    const pct = total > 0n ? (Number(n) / Number(total) * 100).toFixed(1) : "0.0"
-    return `${n.toLocaleString()} samples (${pct}%)`
-}
-
 interface GraphEntry {
     id: number
     name: string
@@ -386,93 +387,6 @@ function resolveNodeByIdOrPattern(graph: StackGraph, name: string, nodeId?: numb
 /** A caller set: maps real node IDs to the weight attributed from below. */
 type CallerSet = Map<number, bigint>
 
-/**
- * Abstract weighted tree that both forward (subtree) and reverse (caller) views implement.
- * The budget-limited tree builder and box-drawing renderer operate on this interface.
- */
-interface WeightedTree<N> {
-    displayName(node: N): string
-    weight(node: N): bigint
-    selfWeight(node: N): bigint
-    childCount(node: N): number
-    /** Returns children sorted by weight descending. */
-    sortedChildren(node: N): N[]
-    /** Optional node ID for display (e.g. forward graph has IDs, caller graph doesn't). */
-    nodeId?(node: N): number | undefined
-}
-
-interface SummaryNode {
-    nodeId?: number
-    displayName: string
-    value: bigint
-    selfValue: bigint
-    totalChildren: number
-    children: SummaryNode[]
-}
-
-/** Budget-limited tree builder. Returns actual lines used so unused budget flows to siblings. */
-function buildTree<N>(view: WeightedTree<N>, root: N, budget: number): SummaryNode {
-    function visit(node: N, budget: number): SummaryNode {
-        const value = view.weight(node)
-        const selfValue = view.selfWeight(node)
-        const totalChildren = view.childCount(node)
-
-        const result: SummaryNode = {
-            nodeId: view.nodeId?.(node),
-            displayName: view.displayName(node),
-            value,
-            selfValue,
-            totalChildren,
-            children: [],
-        }
-
-        if (totalChildren === 0 || budget <= 1) return result
-
-        const sorted = view.sortedChildren(node)
-        let weightLeft = Number(value - selfValue)
-        let budgetLeft = budget - 1
-        for (const child of sorted) {
-            if (budgetLeft <= 0 || weightLeft <= 0) break
-            const childWeight = Number(view.weight(child))
-            const alloc = Math.ceil(childWeight / weightLeft * budgetLeft)
-            weightLeft -= childWeight
-            if (alloc === 0) continue
-            const childNode = visit(child, alloc)
-            budgetLeft -= countNodes(childNode)
-            result.children.push(childNode)
-        }
-
-        return result
-    }
-
-    return visit(root, budget)
-}
-
-function countNodes(node: SummaryNode): number {
-    let count = 1
-    for (const child of node.children) count += countNodes(child)
-    return count
-}
-
-/** Render a SummaryNode tree with box-drawing. childLabel is "children" or "callers". */
-function renderTree(node: SummaryNode, total: bigint, childLabel: string, ownPrefix: string, childPrefix: string, lines: string[]): void {
-    const selfStr = node.selfValue > 0n ? `, self: ${formatSamples(node.selfValue, total)}` : ""
-    const childStr = node.totalChildren > 0 ? `, ${childLabel}: ${node.totalChildren}` : ""
-    const idStr = node.nodeId != null ? `[${node.nodeId}] ` : ""
-    lines.push(`${ownPrefix}${idStr}${node.displayName}, ${formatSamples(node.value, total)}${selfStr}${childStr}`)
-    for (let i = 0; i < node.children.length; i++) {
-        const isLast = i === node.children.length - 1
-        renderTree(
-            node.children[i]!,
-            total,
-            childLabel,
-            childPrefix + (isLast ? "└─ " : "├─ "),
-            childPrefix + (isLast ? "   " : "│  "),
-            lines,
-        )
-    }
-}
-
 function toolListGraphs(): string {
     if (graphMap.size === 0) {
         return "No profiles loaded."
@@ -538,9 +452,28 @@ function toolSearchByName(graphId: number, pattern: string, limit = 10, offset =
     }
 
     matches.sort((a, b) => Number(b.value - a.value))
-    const matchTotal = matches.reduce((sum, { value }) => sum + value, 0n)
     const shown = matches.slice(offset, offset + limit)
     const parentMap = buildParentMap(graph)
+
+    // Combined total counts each stack once: a match nested under another
+    // match (recursion, nested calls) is already covered by its ancestor's
+    // inclusive value, so only top-most matches contribute. This keeps the
+    // percentage ≤100% and makes it read as "samples in stacks passing
+    // through at least one match".
+    const isMatch = new Uint8Array(graph.nodeCount)
+    for (const { nodeId } of matches) {
+        isMatch[nodeId] = 1
+    }
+    let matchTotal = 0n
+    for (const { nodeId, value } of matches) {
+        let cur = parentMap[nodeId] ?? -1
+        while (cur !== -1 && isMatch[cur] === 0) {
+            cur = parentMap[cur] ?? -1
+        }
+        if (cur === -1) {
+            matchTotal += value
+        }
+    }
     const lines = shown.map(({ nodeId, value, selfValue }) => {
         const parentId = parentMap[nodeId] ?? -1
         const parentStr = parentId === -1 ? "root" : `[${parentId}] ${graph.getDisplayName(parentId)}`
@@ -550,7 +483,7 @@ function toolSearchByName(graphId: number, pattern: string, limit = 10, offset =
     const remaining = matches.length - offset - shown.length
     const suffix = remaining > 0 ? `\n  (${remaining} more not shown)` : ""
     const scopeStr = rootNodeId !== 0 ? ` under [${rootNodeId}]` : ""
-    return `${matches.length} node(s) matching /${pattern}/i in "${name}"${scopeStr} — combined: ${formatSamples(matchTotal, total)} (showing ${shown.length} from offset ${offset}):\n${lines.join("\n")}${suffix}`
+    return `${matches.length} node(s) matching /${pattern}/i in "${name}"${scopeStr} — combined: ${formatSamples(matchTotal, total)}, nested matches counted once (showing ${shown.length} from offset ${offset}):\n${lines.join("\n")}${suffix}`
 }
 
 function toolNodeSummary(graphId: number, nodeId: number, parentDepth = 10): string {
@@ -890,7 +823,7 @@ function toolDeleteGraph(graphId: number): string {
     return `Deleted graph ${graphId} "${name}". ${graphMap.size} graph(s) remaining.`
 }
 
-function toolSubtreeSummary(graphId: number, nodeId: number, maxLines = 40): string {
+function toolSubtreeSummary(graphId: number, nodeId: number, maxLines = 40, collapse = true): string {
     const resolved = resolveGraph(graphId)
     if (typeof resolved === "string") {
         return resolved
@@ -918,7 +851,7 @@ function toolSubtreeSummary(graphId: number, nodeId: number, maxLines = 40): str
     }
 
     const total = graph.values[0] ?? 0n
-    const tree = buildTree(forwardView, nodeId, maxLines)
+    const tree = buildTree(forwardView, nodeId, maxLines, collapse)
     const lines: string[] = []
     renderTree(tree, total, "children", "", "", lines)
     return `Subtree summary of [${nodeId}] in "${name}" (${lines.length} lines):\n${lines.join("\n")}`
@@ -932,7 +865,7 @@ const TOOLS = [
     },
     {
         name: "search_by_name",
-        description: "Search for nodes whose names match a regex pattern (case-insensitive). Returns matching node IDs sorted by sample count descending, with total and self samples.",
+        description: "Search for nodes whose names match a regex pattern (case-insensitive). Returns matching node IDs sorted by sample count descending, with total and self samples. Use node_details to see a result's full ancestor chain.",
         inputSchema: {
             type: "object",
             properties: {
@@ -1026,13 +959,14 @@ const TOOLS = [
     },
     {
         name: "subtree_summary",
-        description: "Print a weighted summary of the subtree rooted at a node. Proportionally allocates a line budget to heavier branches, truncating narrow ones. Useful for getting a quick overview of where time is spent under a node.",
+        description: "Print a weighted summary of the subtree rooted at a node. Proportionally allocates a line budget to heavier branches, truncating narrow ones. Pass-through wrapper chains (single children with identical totals) are collapsed to one line. Useful for getting a quick overview of where time is spent under a node.",
         inputSchema: {
             type: "object",
             properties: {
                 graph_id: { type: "number", description: "Graph ID from list_graphs" },
                 node_id: { type: "number", description: "Root node ID for the summary" },
                 max_lines: { type: "number", description: "Maximum number of output lines (default 40)" },
+                collapse: { type: "boolean", description: "Collapse pass-through chains with identical totals (default true)" },
             },
             required: ["graph_id", "node_id"],
         },
@@ -1152,7 +1086,7 @@ function handleMessage(line: string): void {
             } else if (toolName === "subtree_summary") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null) { respondError(id, -32602, "Missing required argument: node_id"); return }
-                text = toolSubtreeSummary(args.graph_id, args.node_id, args.max_lines)
+                text = toolSubtreeSummary(args.graph_id, args.node_id, args.max_lines, args.collapse)
             } else if (toolName === "callers") {
                 if (args.graph_id == null) { respondError(id, -32602, "Missing required argument: graph_id"); return }
                 if (args.node_id == null && !args.pattern) { respondError(id, -32602, "Either node_id or pattern must be provided"); return }

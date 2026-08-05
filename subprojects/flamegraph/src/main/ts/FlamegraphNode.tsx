@@ -236,6 +236,9 @@ export const nodeDetails = (
     graph: StackGraph | DiffGraph,
     options: DiffRenderOptions,
 ): string => {
+    // The [nodeId] prefix matches the node IDs used by the MCP server tools:
+    // as-loaded graphs are built by the same deterministic wasm code paths in
+    // both, so an ID read from this hover text can be queried via MCP directly.
     if (graph instanceof DiffGraph) {
         const rawA = graph.valuesA[nodeId]
         const rawB = graph.valuesB[nodeId]
@@ -246,13 +249,13 @@ export const nodeDetails = (
         const b = options.swapped ? rawA : rawB
         const delta = deltaOf(graph, nodeId, options)
         return (
-            `${graph.getNodeName(nodeId)} A: ${a.toLocaleString()}, ` +
+            `[${nodeId}] ${graph.getNodeName(nodeId)} A: ${a.toLocaleString()}, ` +
             `B: ${b.toLocaleString()}, Δ: ${signedBig(delta)}`
         )
     }
     const value = graph.values[nodeId]
     if (value == undefined) return "Malformed graph. Missing node data."
-    return `${graph.getNodeName(nodeId)} ${BigInt.asIntN(64, value).toLocaleString()} samples`
+    return `[${nodeId}] ${graph.getNodeName(nodeId)} ${BigInt.asIntN(64, value).toLocaleString()} samples`
 }
 
 /** A rendered node rectangle, used for mouse hit testing. */

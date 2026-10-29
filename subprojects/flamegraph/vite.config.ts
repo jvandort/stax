@@ -13,7 +13,7 @@ const wasmPreloadPlugin = (isDev: boolean): PluginOption => ({
     name: "wasm-preloader",
     transformIndexHtml(_) {
         const wasmPath = path.resolve(
-            __dirname,
+            import.meta.dirname,
             "build/wasm/flamegraph_wasm_bg.wasm",
         )
 
@@ -153,20 +153,20 @@ const mcpTemplatePlugin = (): PluginOption => {
     let template = ""
 
     const MCP_SOURCES = [
-        path.resolve(__dirname, "src/main/ts/mcp.ts"),
-        path.resolve(__dirname, "src/main/ts/stackGraph.ts"),
+        path.resolve(import.meta.dirname, "src/main/ts/mcp.ts"),
+        path.resolve(import.meta.dirname, "src/main/ts/stackGraph.ts"),
     ]
 
     async function compile() {
         const result = await esbuild.build({
-            entryPoints: [path.resolve(__dirname, "src/main/ts/mcp.ts")],
+            entryPoints: [path.resolve(import.meta.dirname, "src/main/ts/mcp.ts")],
             bundle: true,
             platform: "node",
             format: "cjs",
             minify: true,
             write: false,
             alias: {
-                "@flamegraph-wasm": path.resolve(__dirname, "build/wasm"),
+                "@flamegraph-wasm": path.resolve(import.meta.dirname, "build/wasm"),
             },
             // wasm_bindgen emits an async init path that uses import.meta.url,
             // which is unavailable in CJS. That path is dead code — mcp.ts
@@ -227,7 +227,7 @@ export default ({ command }: { command: string }): UserConfig => {
         base: "./",
         resolve: {
             alias: {
-                "@flamegraph-wasm": path.resolve(__dirname, "build/wasm"),
+                "@flamegraph-wasm": path.resolve(import.meta.dirname, "build/wasm"),
             },
         },
         assetsInclude: ["**/*.wasm"],
@@ -241,8 +241,8 @@ export default ({ command }: { command: string }): UserConfig => {
                 name: "watch-rust-dir",
                 configureServer(server) {
                     // Configure the dev server to watch the Rust directory for changes
-                    server.watcher.add(path.resolve(__dirname, "src/main/rust"))
-                    server.watcher.add(path.resolve(__dirname, "build/wasm"))
+                    server.watcher.add(path.resolve(import.meta.dirname, "src/main/rust"))
+                    server.watcher.add(path.resolve(import.meta.dirname, "build/wasm"))
                 },
             } satisfies PluginOption,
             isDev &&
@@ -254,7 +254,7 @@ export default ({ command }: { command: string }): UserConfig => {
                             name: "Compile Rust",
                             startup: false,
                             run: [
-                                path.resolve(__dirname, "../../gradlew"),
+                                path.resolve(import.meta.dirname, "../../gradlew"),
                                 ":flamegraph:compileRust",
                             ],
                             condition: (file) =>

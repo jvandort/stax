@@ -1,0 +1,86 @@
+
+Welcome to Gradle 9.8.2!
+
+Here are the highlights of this release:
+ - Java 27 support
+ - Maven mirror settings reuse
+ - Linked problem locations in build output
+
+For more details see https://docs.gradle.org/9.8.2/release-notes.html
+
+> Task :flamegraph:compileJava
+> Task :flamegraph:downloadRustup
+
+> Task :flamegraph:installRust
+info: profile set to minimal
+info: default host tuple is aarch64-unknown-linux-gnu
+info: syncing channel updates for 1.99.1-aarch64-unknown-linux-gnu
+info: latest update on 2026-10-15 for version 1.99.1 (58cf8f9c3 2026-10-13)
+info: downloading 4 components
+
+info: default toolchain set to 1.99.1-aarch64-unknown-linux-gnu
+  1.99.1-aarch64-unknown-linux-gnu installed - rustc 1.99.1 (58cf8f9c3 2026-10-13)
+
+
+Rust is installed now. Great!
+
+To get started you need Cargo's bin directory 
+(/workspace/subprojects/flamegraph/build/cargo-home/bin) in your PATH
+environment variable. This has not been done automatically.
+
+To configure your current shell, you need to source
+the corresponding env file under 
+/workspace/subprojects/flamegraph/build/cargo-home.
+
+Consider running the right command for your shell (note the leading DOT):
+. "/workspace/subprojects/flamegraph/build/cargo-home/env" # For 
+sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_aarch64-unknown-linux-gnu
+CC_aarch64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_aarch64_unknown_linux_gnu
+CC_aarch64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_aarch64_unknown_linux_gnu
+CFLAGS_aarch64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_aarch64-unknown-linux-gnu
+CFLAGS_aarch64-unknown-linux-gnu = None
+
+> Task :flamegraph:downloadWasmPack
+> Task :flamegraph:unpackWasmPack
+
+> Task :flamegraph:compileRust
+[INFO]: 🎯  Checking for the Wasm target...
+[INFO]: 🌀  Compiling to Wasm...
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling wasm-bindgen-shared v0.2.129
+   Compiling rustversion v1.0.23
+   Compiling serde_core v1.0.229
+   Compiling bumpalo v3.20.3
+   Compiling cfg-if v1.0.5
+   Compiling version_check v0.9.5
+   Compiling once_cell v1.21.4
+   Compiling zerocopy v0.8.63
+   Compiling serde v1.0.229
+   Compiling rustc-hash v1.1.0
+   Compiling memchr v2.8.3
+   Compiling ahash v0.8.12
+   Compiling wasm-bindgen v0.2.129
+   Compiling syn v3.0.9
+   Compiling wasm-bindgen-macro-support v0.2.129
+   Compiling serde_derive v1.0.229
+   Compiling jfrs v0.2.5
+   Compiling wasm-bindgen-macro v0.2.129
+   Compiling console_error_panic_hook v0.1.7
+   Compiling flamegraph-wasm v0.1.0 (/workspace/subprojects/flamegraph/src/main/rust)

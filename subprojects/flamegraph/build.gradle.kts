@@ -97,7 +97,7 @@ abstract class InstallRustTask : DefaultTask() {
 }
 
 val installRust = tasks.register<InstallRustTask>("installRust") {
-    rustVersion.set("1.94.0")
+    rustVersion.set("1.99.1")
     rustupInitFile.set(downloadRustup.flatMap { it.destination })
     cargoHome.set(layout.buildDirectory.dir("cargo-home"))
     rustupHome.set(layout.buildDirectory.dir("rustup-home"))
@@ -105,7 +105,7 @@ val installRust = tasks.register<InstallRustTask>("installRust") {
 
 val downloadWasmPack = tasks.register<DownloadTask>("downloadWasmPack") {
 
-    val wasmPackVersion = "0.14.0"
+    val wasmPackVersion = "0.15.0"
     val ext = Extensions.archive
     url.set("https://github.com/wasm-bindgen/wasm-pack/releases/download/v$wasmPackVersion/wasm-pack-v$wasmPackVersion-${getTarget(isWasmPack = true)}$ext")
     destination.set(layout.buildDirectory.file("rust-downloads/wasm-pack$ext"))
@@ -271,7 +271,7 @@ tasks.check {
 
 node {
     download = true
-    version = "24.14.0"
+    version = "26.13.0"
     npmInstallCommand = "ci"
     workDir = layout.buildDirectory.dir("node")
 }

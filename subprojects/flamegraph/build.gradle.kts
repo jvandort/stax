@@ -262,7 +262,16 @@ val cargoTest = tasks.register<CargoCmdlineTask>("cargoTest") {
     rustupHome.set(installRust.flatMap { it.rustupHome })
     buildDir.set(rustBuildDir)
     workingDir.set(rustSrcDir)
-    cmd.set("test")
+    cmd.set("test --workspace")
+}
+
+// Builds the `stax` CLI into build/wasm-build/cli/stax.
+tasks.register<CargoCmdlineTask>("buildCli") {
+    cargoHome.set(installRust.flatMap { it.cargoHome })
+    rustupHome.set(installRust.flatMap { it.rustupHome })
+    buildDir.set(rustBuildDir)
+    workingDir.set(rustSrcDir)
+    cmd.set("build --locked --profile cli -p stax")
 }
 
 tasks.check {

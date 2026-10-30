@@ -38,6 +38,29 @@ output `index.html`. The Java entry-point is `FlamegraphGenerator.java` in `src/
 Generate a demo with e.g.
 `./gradlew :flamegraph:buildDemo --stacks "/abs/path/profile-stacks.txt /abs/path/recording.jfr"`.
 
+## Command-line interface
+
+`stax` queries profiles from the command line, for scripts and coding agents. A background daemon
+holds the loaded graphs, so each command is a separate, short-lived process.
+
+```
+./gradlew :flamegraph:buildCli        # builds build/wasm-build/cli/stax
+stax serve                            # start the daemon
+stax load app-stacks.txt rec.jfr      # -stacks.txt, -stacks.txt.gz, or .jfr
+stax list                             # graph IDs
+stax search 0 'traverseGraph' --limit 5
+stax subtree 0 0                      # node 0 is the root
+stax shutdown
+```
+
+Run `stax --help` and `stax <command> --help` for every command. Patterns are case-insensitive
+regular expressions matched against full (raw) frame names, which can differ from the names shown;
+`stax raw-name` prints one. Errors go to stderr with exit code 1.
+
+The daemon listens on a Unix socket in `$XDG_RUNTIME_DIR/stax/`, or `~/.stax/` when that is unset,
+and logs to `~/.stax/daemon.log`. Windows is not supported. The CLI is a Cargo workspace member at
+`src/main/rust/cli`, sharing the graph code with the WASM build.
+
 ## Managed Toolchains
 
 This project manages its own versions of Node and Rust to ensure build reproducibility and avoid

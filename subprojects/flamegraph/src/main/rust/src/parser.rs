@@ -1,13 +1,10 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{GraphBuilder, WasmStackGraph};
+use crate::{Error, GraphBuilder, WasmStackGraph};
 
-fn parse_line(line: &[u8], graph: &mut GraphBuilder) -> Result<(), String> {
+fn parse_line(line: &[u8], graph: &mut GraphBuilder) -> Result<(), Error> {
     let last_space = memchr::memrchr(b' ', line).ok_or_else(|| {
-        format!(
-            "malformed input: no space in line: {}",
-            std::str::from_utf8(line).unwrap_or("<invalid utf8>")
-        )
+        Error::MalformedLine(std::str::from_utf8(line).unwrap_or("<invalid utf8>").to_string())
     })?;
 
     let mut value: i64 = 0;
@@ -69,14 +66,14 @@ impl StacksParser {
 
     /// Feed a decompressed chunk into the parser.
     /// May be called any number of times. Chunks may be any size.
-    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), JsError> {
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), Error> {
         let mut start = 0;
         for pos in memchr::memchr_iter(b'\n', chunk) {
             if self.line_buf.is_empty() {
                 // No pending partial data — process the slice directly.
                 let line_end = if pos > start && chunk[pos - 1] == b'\r' { pos - 1 } else { pos };
                 if line_end > start {
-                    parse_line(&chunk[start..line_end], &mut self.graph).map_err(|e| JsError::new(&e))?;
+                    parse_line(&chunk[start..line_end], &mut self.graph)?;
                 }
             } else {
                 // Complete the pending partial line.
@@ -86,7 +83,7 @@ impl StacksParser {
                     self.line_buf.pop();
                 }
                 if !self.line_buf.is_empty() {
-                    parse_line(&self.line_buf, &mut self.graph).map_err(|e| JsError::new(&e))?;
+                    parse_line(&self.line_buf, &mut self.graph)?;
                 }
                 self.line_buf.clear();
             }
@@ -101,13 +98,13 @@ impl StacksParser {
 
     /// Finish parsing and return the completed graph.
     /// Consumes the parser. Do not call `feed` after this.
-    pub fn finish(mut self) -> Result<WasmStackGraph, JsError> {
+    pub fn finish(mut self) -> Result<WasmStackGraph, Error> {
         if !self.line_buf.is_empty() {
             // Strip trailing \r (in case the last line ended with \r without \n).
             if self.line_buf.last() == Some(&b'\r') {
                 self.line_buf.pop();
             }
-            parse_line(&self.line_buf, &mut self.graph).map_err(|e| JsError::new(&e))?;
+            parse_line(&self.line_buf, &mut self.graph)?;
         }
         Ok(self.graph.into_wasm_stack_graph())
     }

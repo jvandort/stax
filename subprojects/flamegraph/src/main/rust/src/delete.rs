@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{build_parent_map, get_children, WasmStackGraph};
+use crate::{build_parent_map, get_children, Error, WasmStackGraph};
 
 /// Deletes a node from the graph by severing it from its parent's children list
 /// and subtracting its weight from all ancestors.
@@ -18,10 +18,10 @@ pub fn wasm_delete_node(
     display_names_data: &[u8],
     display_names_offsets: &[i32],
     to_delete: u32,
-) -> Result<WasmStackGraph, JsError> {
+) -> Result<WasmStackGraph, Error> {
     let to_delete = to_delete as usize;
     if to_delete == 0 {
-        return Err(JsError::new("cannot delete the root node"));
+        return Err(Error::DeleteRoot);
     }
 
     let size = names_offsets.len().saturating_sub(1);
@@ -29,7 +29,7 @@ pub fn wasm_delete_node(
 
     let parent_id = parents[to_delete];
     if parent_id < 0 {
-        return Err(JsError::new(&format!("node {} has no parent in a non-empty graph", to_delete)));
+        return Err(Error::NoParent(to_delete));
     }
 
     // Subtract deleted node's weight from all ancestors

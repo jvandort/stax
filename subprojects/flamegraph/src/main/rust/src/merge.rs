@@ -1,7 +1,7 @@
 use ahash::AHashSet;
 use wasm_bindgen::prelude::*;
 
-use crate::{get_children, get_name, GraphBuilder, WasmStackGraph};
+use crate::{get_children, get_name, Error, GraphBuilder, WasmStackGraph};
 
 /// Merges all occurrences of `node_name` into a single aggregate root.
 #[wasm_bindgen]
@@ -12,7 +12,7 @@ pub fn wasm_merge_children(
     names_offsets: &[i32],
     values: &[i64],
     node_name: &str,
-) -> Result<WasmStackGraph, JsError> {
+) -> Result<WasmStackGraph, Error> {
     let size = values.len();
     let node_name_bytes = node_name.as_bytes();
 
@@ -25,10 +25,7 @@ pub fn wasm_merge_children(
         .collect();
 
     if root_nodes.is_empty() {
-        return Err(JsError::new(&format!(
-            "No nodes with name: {}",
-            node_name
-        )));
+        return Err(Error::NoSuchName(node_name.to_string()));
     }
 
     let mut new_graph = GraphBuilder::new(node_name);

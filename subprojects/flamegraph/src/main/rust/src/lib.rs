@@ -3,6 +3,9 @@ use wasm_bindgen::prelude::*;
 mod builder;
 pub(crate) use builder::{DiffBuilder, GraphBuilder};
 
+mod error;
+pub use error::Error;
+
 mod diff;
 pub use diff::wasm_diff_graphs;
 
@@ -119,6 +122,33 @@ impl WasmStackGraph {
 
     pub fn values(&self) -> Vec<i64> {
         self.values.clone()
+    }
+}
+
+/// The arrays of a [`WasmStackGraph`], owned and directly accessible, for native (non-WASM)
+/// consumers such as the CLI. Same layout as [`WasmStackGraph`].
+pub struct StackGraphData {
+    pub children_offsets: Vec<i32>,
+    pub children_data: Vec<i32>,
+    pub names_data: Vec<u8>,
+    pub names_offsets: Vec<i32>,
+    pub display_names_data: Vec<u8>,
+    pub display_names_offsets: Vec<i32>,
+    pub values: Vec<i64>,
+}
+
+impl WasmStackGraph {
+    /// Moves the graph's arrays out without copying them.
+    pub fn into_data(self) -> StackGraphData {
+        StackGraphData {
+            children_offsets: self.children_offsets,
+            children_data: self.children_data,
+            names_data: self.names_data,
+            names_offsets: self.names_offsets,
+            display_names_data: self.display_names_data,
+            display_names_offsets: self.display_names_offsets,
+            values: self.values,
+        }
     }
 }
 

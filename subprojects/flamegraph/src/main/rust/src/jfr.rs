@@ -6,7 +6,7 @@ use jfrs::reader::value_descriptor::ValueDescriptor;
 use jfrs::reader::JfrReader;
 use wasm_bindgen::prelude::*;
 
-use crate::{GraphBuilder, WasmStackGraph};
+use crate::{Error, GraphBuilder, WasmStackGraph};
 
 /// Decodes one JVM type from the front of a method-descriptor string,
 /// returning its Java source form and the remaining input:
@@ -181,18 +181,18 @@ fn fold_chunks(
     wall: &mut GraphBuilder,
     cpu_used: &mut bool,
     wall_used: &mut bool,
-) -> Result<(), String> {
+) -> Result<(), Error> {
     let mut reader = JfrReader::new(Cursor::new(data));
     for chunk in reader.chunks() {
         let (mut chunk_reader, chunk) =
-            chunk.map_err(|e| format!("Failed to read JFR chunk: {e}"))?;
+            chunk.map_err(Error::JfrChunk)?;
         // Frame names repeat heavily via the constant pool; cache the formatted
         // name per (method ref, frame-type ref). Pool indices are per-chunk.
         // `None` marks a bridge frame, which is dropped from the stack.
         let mut name_cache: AHashMap<((i64, i64), (i64, i64)), Option<String>> = AHashMap::new();
 
         for event in chunk_reader.events(&chunk) {
-            let event = event.map_err(|e| format!("Failed to read JFR event: {e}"))?;
+            let event = event.map_err(Error::JfrEvent)?;
             let (builder, used) = match event.class.name() {
                 "jdk.ExecutionSample" | "jdk.NativeMethodSample" => (&mut *cpu, &mut *cpu_used),
                 "profiler.WallClockSample" => (&mut *wall, &mut *wall_used),
@@ -276,8 +276,21 @@ impl Default for JfrParser {
     }
 }
 
+#[wasm_bindgen]
 impl JfrParser {
-    fn feed_impl(&mut self, chunk: &[u8]) -> Result<(), String> {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        JfrParser {
+            pending: Vec::new(),
+            cpu: GraphBuilder::new("root"),
+            wall: GraphBuilder::new("root"),
+            cpu_used: false,
+            wall_used: false,
+        }
+    }
+
+    /// Feed the next bytes of the recording. Chunks may be any size.
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), Error> {
         self.pending.extend_from_slice(chunk);
         let mut start = 0usize;
         loop {
@@ -286,14 +299,14 @@ impl JfrParser {
                 break;
             }
             if rest[..4] != JFR_MAGIC {
-                return Err("Not a JFR file (bad chunk magic)".to_string());
+                return Err(Error::NotJfr);
             }
             let chunk_size = u64::from_be_bytes(rest[8..16].try_into().unwrap());
             if chunk_size < MIN_CHUNK_SIZE {
-                return Err(format!("Invalid JFR chunk size: {chunk_size}"));
+                return Err(Error::InvalidJfrChunkSize(chunk_size));
             }
             let Ok(chunk_size) = usize::try_from(chunk_size) else {
-                return Err(format!("JFR chunk too large: {chunk_size} bytes"));
+                return Err(Error::JfrChunkTooLarge(chunk_size));
             };
             if rest.len() < chunk_size {
                 break;
@@ -313,63 +326,36 @@ impl JfrParser {
         Ok(())
     }
 
-    fn finish_impl(self) -> Result<Vec<(String, WasmStackGraph)>, String> {
-        if !self.pending.is_empty() {
-            return Err(format!(
-                "Truncated JFR input: {} bytes of an incomplete chunk remain",
-                self.pending.len()
-            ));
-        }
-        let mut graphs = Vec::new();
-        if self.cpu_used {
-            graphs.push(("cpu".to_string(), self.cpu.into_wasm_stack_graph()));
-        }
-        if self.wall_used {
-            graphs.push(("wall".to_string(), self.wall.into_wasm_stack_graph()));
-        }
-        if graphs.is_empty() {
-            return Err("No sample events found in this JFR (looked for jdk.ExecutionSample, \
-                        jdk.NativeMethodSample, and profiler.WallClockSample)"
-                .to_string());
-        }
-        Ok(graphs)
-    }
-}
-
-#[wasm_bindgen]
-impl JfrParser {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        JfrParser {
-            pending: Vec::new(),
-            cpu: GraphBuilder::new("root"),
-            wall: GraphBuilder::new("root"),
-            cpu_used: false,
-            wall_used: false,
-        }
-    }
-
-    /// Feed the next bytes of the recording. Chunks may be any size.
-    pub fn feed(&mut self, chunk: &[u8]) -> Result<(), JsError> {
-        self.feed_impl(chunk).map_err(|e| JsError::new(&e))
-    }
-
     /// Finish parsing and return the decoded graphs, one per sample kind
     /// present. Consumes the parser. Errors on truncated input or when the
     /// recording contains no supported sample events.
-    pub fn finish(self) -> Result<WasmJfrGraphs, JsError> {
-        let graphs = self.finish_impl().map_err(|e| JsError::new(&e))?;
-        let (kinds, graphs) = graphs.into_iter().map(|(k, g)| (k, Some(g))).unzip();
+    pub fn finish(self) -> Result<WasmJfrGraphs, Error> {
+        if !self.pending.is_empty() {
+            return Err(Error::TruncatedJfr(self.pending.len()));
+        }
+        let mut kinds = Vec::new();
+        let mut graphs = Vec::new();
+        if self.cpu_used {
+            kinds.push("cpu".to_string());
+            graphs.push(Some(self.cpu.into_wasm_stack_graph()));
+        }
+        if self.wall_used {
+            kinds.push("wall".to_string());
+            graphs.push(Some(self.wall.into_wasm_stack_graph()));
+        }
+        if graphs.is_empty() {
+            return Err(Error::NoJfrSamples);
+        }
         Ok(WasmJfrGraphs { kinds, graphs })
     }
 }
 
 /// Test helper: decode a complete JFR recording in one shot via [`JfrParser`].
 #[cfg(test)]
-pub(crate) fn parse_jfr_impl(data: &[u8]) -> Result<Vec<(String, WasmStackGraph)>, String> {
+pub(crate) fn parse_jfr_impl(data: &[u8]) -> Result<Vec<(String, WasmStackGraph)>, Error> {
     let mut parser = JfrParser::new();
-    parser.feed_impl(data)?;
-    parser.finish_impl()
+    parser.feed(data)?;
+    Ok(parser.finish()?.into_graphs())
 }
 
 /// The graphs decoded from one JFR file, one per sample kind present:
@@ -393,11 +379,15 @@ impl WasmJfrGraphs {
 
     /// Transfers ownership of graph `i` to the caller. Each graph can be
     /// taken exactly once.
-    pub fn take_graph(&mut self, i: u32) -> Result<WasmStackGraph, JsError> {
-        self.graphs
-            .get_mut(i as usize)
-            .and_then(Option::take)
-            .ok_or_else(|| JsError::new("Graph index out of range or already taken"))
+    pub fn take_graph(&mut self, i: u32) -> Result<WasmStackGraph, Error> {
+        self.graphs.get_mut(i as usize).and_then(Option::take).ok_or(Error::GraphTaken)
+    }
+}
+
+impl WasmJfrGraphs {
+    /// Consumes the result, returning each untaken graph with its sample kind.
+    pub fn into_graphs(self) -> Vec<(String, WasmStackGraph)> {
+        self.kinds.into_iter().zip(self.graphs).filter_map(|(k, g)| Some((k, g?))).collect()
     }
 }
 
@@ -492,9 +482,9 @@ mod tests {
         let one_shot = parse_jfr_impl(CPU_SAMPLE_JFR).unwrap();
         let mut parser = JfrParser::new();
         for chunk in CPU_SAMPLE_JFR.chunks(4096) {
-            parser.feed_impl(chunk).unwrap();
+            parser.feed(chunk).unwrap();
         }
-        let streamed = parser.finish_impl().unwrap();
+        let streamed = parser.finish().unwrap().into_graphs();
         assert_eq!(streamed.len(), one_shot.len());
         assert_eq!(streamed[0].0, one_shot[0].0);
         assert_eq!(streamed[0].1.values[0], one_shot[0].1.values[0]);
@@ -519,7 +509,7 @@ mod tests {
         let Err(err) = parse_jfr_impl(truncated) else {
             panic!("truncated input should fail");
         };
-        assert!(err.contains("Truncated"), "unexpected error: {err}");
+        assert!(matches!(err, Error::TruncatedJfr(_)), "unexpected error: {err}");
     }
 
     /// Busy implements Supplier<Long>, so raw stacks contain the synthetic

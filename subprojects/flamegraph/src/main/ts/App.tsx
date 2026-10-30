@@ -16,9 +16,6 @@ import { ColorPicker } from "./ColorPicker"
 import { GraphActions } from "./GraphActions"
 import { SearchPanel } from "./SearchPanel"
 import { ResizablePanel } from "./ResizablePanel"
-import { decodeBase64 } from "./encoding.ts"
-import { McpInstructionsOverlay } from "./McpInstructionsOverlay"
-import MCP_TEMPLATE from "virtual:mcp-template"
 
 type OpenPanel = "graphs" | "colors" | null
 
@@ -52,11 +49,6 @@ const App = (): React.JSX.Element => {
         showSimplifiedGraph,
         diffGraphs,
     } = useGraphTabs()
-
-    const [embeddedStacks, setEmbeddedStacks] = useState<EmbeddedStack[]>([])
-    const [isMcpDownloading, setIsMcpDownloading] = useState(false)
-    const [mcpFilename, setMcpFilename] = useState<string | null>(null)
-    const [showMcpPopup, setShowMcpPopup] = useState(false)
 
     // Ref so the parsed stacks survive React strict mode's effect double-invocation.
     // Strict mode intentionally kills and recreates the worker pool between the two
@@ -111,85 +103,8 @@ const App = (): React.JSX.Element => {
             loadEmbeddedStack(name, encodedData)
         })
         embeddedStacksRef.current = stacks
-        setEmbeddedStacks(stacks)
         namesEl.remove()
     }, [loadEmbeddedStack])
-
-    const handleMcpDownload = useCallback(async () => {
-        if (embeddedStacks.length === 0) {
-            return
-        }
-
-        if (mcpFilename !== null) {
-            setShowMcpPopup(true)
-            return
-        }
-
-        setIsMcpDownloading(true)
-        const templateBytes = decodeBase64(MCP_TEMPLATE)
-        const ds = new DecompressionStream("gzip")
-        const writer = ds.writable.getWriter()
-        // Both code paths in decodeBase64 allocate a plain ArrayBuffer (never
-        // SharedArrayBuffer), so the cast is safe even though the return type
-        // is Uint8Array<ArrayBufferLike>.
-        void writer.write(templateBytes as unknown as Uint8Array<ArrayBuffer>)
-        void writer.close()
-
-        const reader = ds.readable.getReader()
-        const chunks: Uint8Array[] = []
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) {
-                break
-            }
-            if (value) {
-                chunks.push(value)
-            }
-        }
-
-        let totalLength = 0
-        for (const chunk of chunks) {
-            totalLength += chunk.length
-        }
-        const merged = new Uint8Array(totalLength)
-        let offset = 0
-        for (const chunk of chunks) {
-            merged.set(chunk, offset)
-            offset += chunk.length
-        }
-
-        const templateJs = new TextDecoder("utf-8").decode(merged)
-        const wasmBase64 = await window.WASM_BASE64
-
-        const blobParts: BlobPart[] = [
-            "#!/usr/bin/env node\n",
-            `const __WASM_BASE64__="`,
-            wasmBase64,
-            `";\n`,
-            templateJs,
-            "\n// EMBEDDED_DATA_START\n",
-        ]
-        for (const { name, encodedData } of embeddedStacks) {
-            blobParts.push(
-                `// STACKS_NAME ${name}\n`,
-                "// STACKS_DATA ",
-                encodedData,
-                "\n",
-            )
-        }
-
-        const filename = `flamegraph-${crypto.randomUUID()}.js`
-        const blob = new Blob(blobParts, { type: "application/javascript" })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = filename
-        a.click()
-        URL.revokeObjectURL(url)
-        setMcpFilename(filename)
-        setShowMcpPopup(true)
-        setIsMcpDownloading(false)
-    }, [embeddedStacks, mcpFilename])
 
     const selectedTabData = selectedTab ? allTabData.get(selectedTab) : null
     const graphState = selectedTabData?.graph ?? null
@@ -325,17 +240,6 @@ const App = (): React.JSX.Element => {
                         gap: "8px",
                     }}
                 >
-                    <button
-                        onClick={() => {
-                            void handleMcpDownload()
-                        }}
-                        disabled={
-                            embeddedStacks.length === 0 || isMcpDownloading
-                        }
-                        title="Download MCP server for this flamegraph"
-                    >
-                        MCP
-                    </button>
                     <RangeSlider
                         min={0}
                         max={COORDINATE_WIDTH}
@@ -496,12 +400,6 @@ const App = (): React.JSX.Element => {
                     </Stack>
                 </Row>
 
-                {showMcpPopup && mcpFilename !== null && (
-                    <McpInstructionsOverlay
-                        filename={mcpFilename}
-                        onClose={() => setShowMcpPopup(false)}
-                    />
-                )}
             </Stack>
         </Flamegraph>
     )

@@ -236,9 +236,9 @@ export const nodeDetails = (
     graph: StackGraph | DiffGraph,
     options: DiffRenderOptions,
 ): string => {
-    // The [nodeId] prefix matches the node IDs used by the MCP server tools:
-    // as-loaded graphs are built by the same deterministic wasm code paths in
-    // both, so an ID read from this hover text can be queried via MCP directly.
+    // The [nodeId] prefix matches the node IDs used by the stax CLI: as-loaded
+    // graphs are built by the same deterministic Rust code paths in both, so an
+    // ID read from this hover text can be queried with the CLI directly.
     if (graph instanceof DiffGraph) {
         const rawA = graph.valuesA[nodeId]
         const rawB = graph.valuesB[nodeId]

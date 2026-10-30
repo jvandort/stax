@@ -5,7 +5,6 @@ import { run } from "vite-plugin-run"
 import path from "node:path"
 import fs from "node:fs"
 import zlib from "node:zlib"
-import * as esbuild from "esbuild"
 
 // Inject the wasm into the header as early as possible,
 // so the browser can initialize the worker as ASAP.
@@ -42,22 +41,6 @@ const wasmPreloadPlugin = (isDev: boolean): PluginOption => ({
                             : WebAssembly.compileStreaming(fetch(wasmSource));
 
                         window.WASM_MODULE_PROMISE.catch(e => console.error("WASM Preload Failed:", e));
-
-                        // Expose raw base64 for MCP server download
-                        if (isDataUri) {
-                            window.WASM_BASE64 = Promise.resolve(
-                                wasmSource.slice("data:application/wasm;base64,".length)
-                            );
-                        } else {
-                            // Dev mode: fetch wasm and convert to base64
-                            window.WASM_BASE64 = fetch(wasmSource)
-                                .then(r => r.arrayBuffer())
-                                .then(buf => {
-                                    var bytes = new Uint8Array(buf), bin = "", i = 0;
-                                    while (i < bytes.length) bin += String.fromCharCode(bytes[i++]);
-                                    return btoa(bin);
-                                });
-                        }
                     })();
                 `,
                 injectTo: "head-prepend",
@@ -66,7 +49,7 @@ const wasmPreloadPlugin = (isDev: boolean): PluginOption => ({
     },
 })
 
-// In dev mode, inject a demo stacks file so the MCP button has something to work with.
+// In dev mode, inject a demo stacks file so the app has something to show.
 // Produces the same DOM structure the Java wrapper creates for real embedded stacks.
 const devDemoStacksPlugin = (): PluginOption => {
     const DEMO_STACKS = `\
@@ -146,73 +129,6 @@ gamma;middleware;foo;logging 5`
     }
 }
 
-// Compile mcp.ts as a standalone Node.js bundle, then gzip+base64 the result
-// for embedding in the HTML via a virtual module. WASM and stacks data are
-// injected at download time — no duplicate copies in the HTML.
-const mcpTemplatePlugin = (): PluginOption => {
-    let template = ""
-
-    const MCP_SOURCES = [
-        path.resolve(import.meta.dirname, "src/main/ts/mcp.ts"),
-        path.resolve(import.meta.dirname, "src/main/ts/stackGraph.ts"),
-    ]
-
-    async function compile() {
-        const result = await esbuild.build({
-            entryPoints: [path.resolve(import.meta.dirname, "src/main/ts/mcp.ts")],
-            bundle: true,
-            platform: "node",
-            format: "cjs",
-            minify: true,
-            write: false,
-            alias: {
-                "@flamegraph-wasm": path.resolve(import.meta.dirname, "build/wasm"),
-            },
-            // wasm_bindgen emits an async init path that uses import.meta.url,
-            // which is unavailable in CJS. That path is dead code — mcp.ts
-            // uses initSync() instead.
-            logOverride: { "empty-import-meta": "silent" },
-        })
-
-        const js = result.outputFiles[0]!.text
-        const compressed = zlib.gzipSync(Buffer.from(js))
-        template = compressed.toString("base64")
-    }
-
-    return {
-        name: "mcp-template",
-        async buildStart() {
-            await compile()
-        },
-
-        configureServer(server) {
-            MCP_SOURCES.forEach((f) => server.watcher.add(f))
-
-            server.watcher.on("change", async (file) => {
-                if (!MCP_SOURCES.includes(file)) {
-                    return
-                }
-                await compile()
-                const mod = server.moduleGraph.getModuleById("\0virtual:mcp-template")
-                if (mod) {
-                    server.moduleGraph.invalidateModule(mod)
-                }
-                server.hot.send({ type: "full-reload" })
-            })
-        },
-
-        resolveId(id) {
-            return id === "virtual:mcp-template" ? "\0virtual:mcp-template" : null
-        },
-
-        load(id) {
-            return id === "\0virtual:mcp-template"
-                ? `export default ${JSON.stringify(template)}`
-                : null
-        },
-    }
-}
-
 export default ({ command }: { command: string }): UserConfig => {
     const isDev = command === "serve"
     return {
@@ -235,7 +151,6 @@ export default ({ command }: { command: string }): UserConfig => {
             react(),
             viteSingleFile(),
             wasmPreloadPlugin(isDev),
-            mcpTemplatePlugin(),
             isDev && devDemoStacksPlugin(),
             {
                 name: "watch-rust-dir",

@@ -537,17 +537,36 @@ pub fn callers(name: &str, graph: &Graph, target: &Target, max_lines: usize) -> 
     let node_id = resolve_target(graph, name, target)?;
     let target_name = graph.name(node_id);
 
-    // Every instance of the function, each with its own inclusive value.
-    let instances: CallerSet =
-        (0..graph.node_count()).filter(|&i| graph.name(i) == target_name).map(|i| (i, graph.value(i))).collect();
-    let instance_count = instances.len();
+    let parents = graph.parent_map();
+    let is_instance: Vec<bool> = (0..graph.node_count()).map(|i| graph.name(i) == target_name).collect();
+    let instance_count = is_instance.iter().filter(|&&b| b).count();
 
-    let view = CallerView { graph, parents: graph.parent_map() };
-    let tree = build_tree(&view, instances, max_lines as i64, false);
+    // Start from the outermost instances only, each with its inclusive value. An instance nested
+    // under another (recursion) is already covered by that ancestor's inclusive value, so counting
+    // it too would count its samples once per level of recursion. This way every sample through
+    // the function counts exactly once, as in `aggregate` and `search`.
+    let outermost: CallerSet = (0..graph.node_count())
+        .filter(|&i| is_instance[i])
+        .filter(|&i| {
+            let mut cur = parents[i];
+            while let Some(c) = cur {
+                if is_instance[c] {
+                    return false;
+                }
+                cur = parents[c];
+            }
+            true
+        })
+        .map(|i| (i, graph.value(i)))
+        .collect();
+    let nested_note = if outermost.len() < instance_count { ", nested recursive calls counted once" } else { "" };
+
+    let view = CallerView { graph, parents };
+    let tree = build_tree(&view, outermost, max_lines as i64, false);
     let mut lines = Vec::new();
     render_tree(&tree, graph.total(), "callers", "", "", &mut lines);
     Ok(format!(
-        "Callers of \"{}\" in \"{name}\" ({} instances, {} lines):\n{}",
+        "Callers of \"{}\" in \"{name}\" ({} instances{nested_note}, {} lines):\n{}",
         graph.display_name(node_id),
         format_count(instance_count as i64),
         lines.len(),

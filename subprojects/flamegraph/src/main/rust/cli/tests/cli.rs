@@ -121,24 +121,37 @@ fn load_formats_and_query() {
     assert!(daemon.ok(&["hot-path", "2", "0"]).contains("Busy.fib"));
     assert!(daemon.ok(&["subtree", "0", "0"]).starts_with("Subtree summary of [0]"));
     assert!(daemon.ok(&["callers", "0", "--pattern", "^c$"]).contains("callers: 2"));
+
+    // Recursive calls count once: every sample through f, once each, by outermost caller.
+    daemon.write("rec-stacks.txt", b"a;f;f;g 3\nb;f 2\nb;f;f 1\n");
+    daemon.ok(&["load", "rec-stacks.txt"]);
+    assert_eq!(
+        daemon.ok(&["callers", "3", "--pattern", "^f$"]),
+        "Callers of \"f\" in \"rec-stacks.txt\" (4 instances, nested recursive calls counted once, 5 lines):\n\
+         f, 6 samples (100.0%), callers: 2\n\
+         ├─ a, 3 samples (50.0%), callers: 1\n\
+         │  └─ root, 3 samples (50.0%), self: 3 samples (50.0%)\n\
+         └─ b, 3 samples (50.0%), callers: 1\n\
+         \x20  └─ root, 3 samples (50.0%), self: 3 samples (50.0%)\n"
+    );
     assert_eq!(daemon.ok(&["raw-name", "0", "2"]), "b\n");
 
-    assert!(daemon.ok(&["aggregate", "0", "--pattern", "^b$"]).starts_with("Created merged graph [3]"));
-    assert!(daemon.ok(&["icicle", "0", "--node", "0"]).starts_with("Created icicle graph [4]"));
+    assert!(daemon.ok(&["aggregate", "0", "--pattern", "^b$"]).starts_with("Created merged graph [4]"));
+    assert!(daemon.ok(&["icicle", "0", "--node", "0"]).starts_with("Created icicle graph [5]"));
 
     // Frame-type variants of the same method merge.
     daemon.write("jit-stacks.txt", b"run_[0];work_[j] 2\nrun_[1];work_[j] 3\n");
     daemon.ok(&["load", "jit-stacks.txt"]);
-    assert!(daemon.ok(&["children", "5", "0"]).contains("(2/2)"));
+    assert!(daemon.ok(&["children", "6", "0"]).contains("(2/2)"));
     assert_eq!(
-        daemon.ok(&["simplify", "5"]),
-        "Created simplified graph [6] \"jit-stacks.txt [simplified]\" with 3 nodes, root node: 0.\n"
+        daemon.ok(&["simplify", "6"]),
+        "Created simplified graph [7] \"jit-stacks.txt [simplified]\" with 3 nodes, root node: 0.\n"
     );
-    assert!(daemon.ok(&["children", "6", "0"]).contains("(1/1)"));
+    assert!(daemon.ok(&["children", "7", "0"]).contains("(1/1)"));
 
     // IDs are never reused.
-    assert!(daemon.ok(&["unload", "4"]).contains("Unloaded graph 4"));
-    assert!(daemon.ok(&["load", "app-stacks.txt"]).contains("[7] app-stacks.txt"));
+    assert!(daemon.ok(&["unload", "5"]).contains("Unloaded graph 5"));
+    assert!(daemon.ok(&["load", "app-stacks.txt"]).contains("[8] app-stacks.txt"));
 }
 
 #[test]

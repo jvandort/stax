@@ -26,3 +26,11 @@ jfrs = { version = "0.2.5", default-features = false }
 # the gains are marginal, while the size saving meaningfully reduces initial load time.
 opt-level = "z"
 lto = true
+
+[workspace]
+members = ["cli"]
+
+# The CLI runs natively, where speed matters more than binary size.
+[profile.cli]
+inherits = "release"
+opt-level = 3

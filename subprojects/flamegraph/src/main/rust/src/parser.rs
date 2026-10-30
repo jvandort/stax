@@ -3,31 +3,31 @@ use wasm_bindgen::prelude::*;
 use crate::{Error, GraphBuilder, WasmStackGraph};
 
 fn parse_line(line: &[u8], graph: &mut GraphBuilder) -> Result<(), Error> {
-    let last_space = memchr::memrchr(b' ', line).ok_or_else(|| {
-        Error::MalformedLine(std::str::from_utf8(line).unwrap_or("<invalid utf8>").to_string())
-    })?;
+    let malformed = || Error::MalformedLine(String::from_utf8_lossy(line).into_owned());
+    let last_space = memchr::memrchr(b' ', line).ok_or_else(malformed)?;
 
+    let count = &line[last_space + 1..];
+    if count.is_empty() || !count.iter().all(u8::is_ascii_digit) {
+        return Err(malformed());
+    }
     let mut value: i64 = 0;
-    for &b in &line[last_space + 1..] {
-        value = value * 10 + (b - b'0') as i64;
+    for &b in count {
+        value = value.checked_mul(10).and_then(|v| v.checked_add((b - b'0') as i64)).ok_or_else(malformed)?;
     }
 
-    let frames = &line[..last_space];
+    let frames = std::str::from_utf8(&line[..last_space]).map_err(|_| malformed())?;
     let mut parent = 0usize;
     let mut prev = 0usize;
 
-    for pos in memchr::memchr_iter(b';', frames) {
+    for pos in memchr::memchr_iter(b';', frames.as_bytes()) {
         if pos > prev {
-            // SAFETY: input is valid UTF-8 (decompressed from UTF-8 encoded text)
-            let name = unsafe { std::str::from_utf8_unchecked(&frames[prev..pos]) };
-            (parent, _) = graph.get_or_create_child(parent, name, value);
+            (parent, _) = graph.get_or_create_child(parent, &frames[prev..pos], value);
         }
         prev = pos + 1;
     }
     // Last (or only) frame
     if prev < frames.len() {
-        let name = unsafe { std::str::from_utf8_unchecked(&frames[prev..]) };
-        graph.get_or_create_child(parent, name, value);
+        graph.get_or_create_child(parent, &frames[prev..], value);
     }
 
     graph.values[0] += value;
@@ -116,4 +116,38 @@ pub fn parse_stacks_impl(data: &[u8]) -> WasmStackGraph {
     let mut parser = StacksParser::new("root");
     parser.feed(data).expect("parse error in feed");
     parser.finish().expect("parse error in finish")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(data: &[u8]) -> Result<WasmStackGraph, Error> {
+        let mut parser = StacksParser::new("root");
+        parser.feed(data)?;
+        parser.finish()
+    }
+
+    #[test]
+    fn test_parses_counts() {
+        let g = parse(b"a;b 3\r\na 2\n").unwrap();
+        assert_eq!(g.values[0], 5);
+    }
+
+    #[test]
+    fn test_non_numeric_count_is_an_error() {
+        assert!(matches!(parse(b"a;b x3\n"), Err(Error::MalformedLine(_))));
+        assert!(matches!(parse(b"a;b \n"), Err(Error::MalformedLine(_))));
+        assert!(matches!(parse(b"plugins {\n"), Err(Error::MalformedLine(_))));
+    }
+
+    #[test]
+    fn test_overflowing_count_is_an_error() {
+        assert!(matches!(parse(b"a 99999999999999999999\n"), Err(Error::MalformedLine(_))));
+    }
+
+    #[test]
+    fn test_invalid_utf8_is_an_error() {
+        assert!(matches!(parse(b"a;\xff\xfe 1\n"), Err(Error::MalformedLine(_))));
+    }
 }

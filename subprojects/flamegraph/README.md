@@ -50,6 +50,7 @@ stax load app-stacks.txt rec.jfr      # -stacks.txt, -stacks.txt.gz, or .jfr
 stax list                             # graph IDs
 stax search 0 'traverseGraph' --limit 5
 stax subtree 0 0                      # node 0 is the root
+stax simplify 0                       # merge JIT/inlined/interpreted variants of each frame
 stax shutdown
 ```
 

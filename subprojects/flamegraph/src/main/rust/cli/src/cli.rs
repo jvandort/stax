@@ -89,6 +89,16 @@ pub enum Command {
         target: Target,
     },
 
+    /// Create a simplified copy of a graph (or of the subtree under a node) that merges frames
+    /// differing only in JVM execution details: frame type (interpreted, C1, inlined, JIT), JFR line
+    /// numbers, and per-run ids of lambdas, proxies, and generated accessors.
+    Simplify {
+        graph: u32,
+        /// Simplify only the subtree under this node.
+        #[arg(long, default_value_t = 0)]
+        node: usize,
+    },
+
     /// Print a node's full raw name, for when the display name is abbreviated.
     RawName { graph: u32, node: usize },
 

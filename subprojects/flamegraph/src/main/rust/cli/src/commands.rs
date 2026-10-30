@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
-use flamegraph_wasm::{wasm_icicle_graph, wasm_merge_children, JfrParser, StacksParser};
+use flamegraph_wasm::{wasm_icicle_graph, wasm_merge_children, wasm_simplify_graph, JfrParser, StacksParser};
 use regex::{Regex, RegexBuilder};
 
 use crate::cli::Target;
@@ -343,6 +343,22 @@ pub fn icicle(name: &str, graph: &Graph, target: &Target) -> Result<(String, Gra
         graph.node_count() as u32,
     );
     Ok((format!("{name} [icicle: {}]", graph.display_name(node_id)), Graph::new(icicle)))
+}
+
+/// Simplifies the subtree under a node. Returns the new graph's name and graph.
+pub fn simplify(name: &str, graph: &Graph, node_id: usize) -> Result<(String, Graph), String> {
+    check_node(graph, node_id)?;
+    let d = graph.data();
+    let simplified = wasm_simplify_graph(
+        &d.children_offsets,
+        &d.children_data,
+        &d.names_data,
+        &d.names_offsets,
+        &d.values,
+        node_id as u32,
+    );
+    let suffix = if node_id == 0 { String::new() } else { format!(": {}", graph.display_name(node_id)) };
+    Ok((format!("{name} [simplified{suffix}]"), Graph::new(simplified)))
 }
 
 /// Describes a graph created by `aggregate` or `icicle`.

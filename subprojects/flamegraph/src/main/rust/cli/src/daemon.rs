@@ -165,6 +165,13 @@ fn execute(command: Command, session: &Mutex<Session>) -> Outcome {
             let id = lock().register(new_name.clone(), icicle);
             Ok(commands::created("icicle", id, &new_name, node_count, ""))
         }
+        Command::Simplify { graph, node } => {
+            let (name, g) = lock().get(graph)?;
+            let (new_name, simplified) = commands::simplify(&name, &g, node)?;
+            let node_count = simplified.node_count();
+            let id = lock().register(new_name.clone(), simplified);
+            Ok(commands::created("simplified", id, &new_name, node_count, ""))
+        }
         Command::RawName { graph, node } => {
             let (_, g) = lock().get(graph)?;
             commands::raw_name(&g, node)

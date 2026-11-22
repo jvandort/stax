@@ -12,6 +12,12 @@ tasks.javadoc {
     exclude("**/internal/**")
 }
 
+tasks.withType<Jar>().configureEach {
+    from(layout.settingsDirectory.file("LICENSE")) {
+        into("META-INF")
+    }
+}
+
 tasks.jar {
     manifest {
         attributes(mapOf("Main-Class" to jvm.mainClass))

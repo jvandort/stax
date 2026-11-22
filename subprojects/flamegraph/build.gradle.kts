@@ -8,7 +8,13 @@ plugins {
     id("stax.node-rust")
     id("stax.node.playwright")
     id("java-test-fixtures")
+    id("maven-publish")
+    id("signing")
 }
+
+group = "com.jvandort"
+version = "1.0.0"
+description = "Self-contained, interactive flamegraphs for async-profiler stacks and JFR recordings."
 
 rust {
     version = "1.99.1"
@@ -28,8 +34,14 @@ node {
     version = "26.13.0"
 }
 
+java {
+    withSourcesJar()
+    withJavadocJar()
+}
+
 jvm {
     mainClass = "com.jvandort.stax.FlamegraphGenerator"
+    targetJvmVersion = 17
 }
 
 repositories {
@@ -48,6 +60,50 @@ tasks.test {
         name = "stax.test-data.path"
         dir = testData
     })
+}
+
+publishing {
+    publications {
+        register<MavenPublication>("maven") {
+            from(components["java"])
+            // The test fixtures are published as stax-<version>-test-fixtures.jar, for Gradle
+            // builds to use as testFixtures("com.jvandort:stax:<version>"). A POM can't express
+            // that variant, so Maven builds don't see them. That's expected, not worth a warning.
+            suppressPomMetadataWarningsFor("testFixturesApiElements")
+            suppressPomMetadataWarningsFor("testFixturesRuntimeElements")
+            pom {
+                name = project.name
+                description = project.description
+                url = "https://github.com/jvandort/stax"
+                licenses {
+                    license {
+                        name = "Apache License, Version 2.0"
+                        url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+                    }
+                }
+                developers {
+                    developer {
+                        name = "Justin Van Dort"
+                    }
+                }
+                scm {
+                    connection = "scm:git:https://github.com/jvandort/stax.git"
+                    url = "https://github.com/jvandort/stax"
+                }
+            }
+        }
+    }
+}
+
+// Signs with an ASCII-armored secret key passed in as Gradle properties (for example as
+// ORG_GRADLE_PROJECT_signingKey), so no keyring is needed. Without a key, publishing
+// locally still works, unsigned. Central rejects an unsigned upload.
+signing {
+    val signingKey = providers.gradleProperty("signingKey")
+    if (signingKey.isPresent) {
+        useInMemoryPgpKeys(signingKey.get(), providers.gradleProperty("signingPassword").orNull)
+        sign(publishing.publications["maven"])
+    }
 }
 
 // Embed the vite-built index.html into the jar as a classpath resource so that

@@ -1,6 +1,6 @@
 [package]
 name = "flamegraph-wasm"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [lib]
@@ -29,6 +29,11 @@ lto = true
 
 [workspace]
 members = ["cli"]
+
+# Every package has the project's version, which stax --version reports, and which the build
+# checks (checkCargoVersion).
+[workspace.package]
+version = "1.0.0"
 
 # The CLI runs natively, where speed matters more than binary size.
 [profile.cli]

@@ -3,6 +3,7 @@ import com.jvandort.stax.buildlogic.Cargo
 import com.jvandort.stax.buildlogic.CargoExec
 import com.jvandort.stax.buildlogic.InstallRust
 import com.jvandort.stax.buildlogic.RustExtension
+import com.jvandort.stax.buildlogic.CheckCargoVersion
 import com.jvandort.stax.buildlogic.common.Download
 import com.jvandort.stax.buildlogic.common.Platform
 import com.jvandort.stax.buildlogic.common.Platform.Architecture
@@ -70,6 +71,11 @@ val cargoTest = tasks.register<Cargo>("cargoTest") {
     args = listOf("test", "--locked", "--workspace")
 }
 
+val checkCargoVersion = tasks.register<CheckCargoVersion>("checkCargoVersion") {
+    description = "Checks that every package in the workspace has the project's version."
+    expectedVersion.set(provider { project.version.toString() })
+}
+
 tasks.check {
-    dependsOn(cargoTest)
+    dependsOn(cargoTest, checkCargoVersion)
 }

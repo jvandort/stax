@@ -6,6 +6,7 @@ plugins {
     id("stax.jvm")
     id("stax.rust-base")
     id("stax.node-rust")
+    id("stax.node.playwright")
     id("java-test-fixtures")
 }
 
@@ -39,7 +40,7 @@ dependencies {
     api("org.jspecify:jspecify:1.0.1")
 }
 
-// Recordings and stacks files that the Rust and Java tests share.
+// Recordings and stacks files that the Rust, Java and browser tests share.
 val testData = layout.projectDirectory.dir("src/test-data")
 
 tasks.test {
@@ -86,4 +87,19 @@ abstract class GenerateFlamegraph : RunApplication() {
 
 tasks.register<GenerateFlamegraph>("buildDemo") {
     outputFile = layout.buildDirectory.file("demo/index.html")
+}
+
+// The page the Playwright tests open, made by the generator from the jar's classes.
+val generateTestPage = tasks.register<GenerateFlamegraph>("generateTestPage") {
+    embedded.from(
+        layout.projectDirectory.file("src/browserTest/data/small-stacks.txt"),
+        testData.file("cpu-sample.jfr"),
+    )
+    outputFile = layout.buildDirectory.file("browser-test/flamegraph.html")
+}
+
+tasks.playwrightTest {
+    val page = generateTestPage.flatMap { it.outputFile }
+    inputs.file(page)
+    environment.put("STAX_TEST_PAGE", page.map { it.asFile.absolutePath })
 }

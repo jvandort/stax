@@ -11,7 +11,7 @@ final class TestProperties {
     }
 
     /**
-     * The test-data directory, with recordings shared with the Rust tests.
+     * The test-data directory, with recordings shared with the Rust and browser tests.
      */
     static Path testData() {
         return requiredPath("stax.test-data.path");

@@ -37,7 +37,9 @@
   "include": [
     "src/main/ts",
     "src/test/ts",
+    "src/browserTest/ts",
     "vite.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "playwright.config.ts"
   ],
 }

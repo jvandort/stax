@@ -1,0 +1,3 @@
+main;compile;parse 10
+main;compile 5
+main;test 3

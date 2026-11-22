@@ -429,9 +429,9 @@ mod tests {
 
     /// A ~2s recording of a busy loop with only jdk.ExecutionSample enabled:
     /// Busy.main -> Busy.get() (via a Supplier<Long> bridge method) ->
-    /// Busy.fib recursion. See test-data/README.md.
+    /// Busy.fib recursion. See src/test-data/README.md in the Gradle project.
     const CPU_SAMPLE_JFR: &[u8] =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/test-data/cpu-sample.jfr"));
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../test-data/cpu-sample.jfr"));
 
     fn node_names(g: &WasmStackGraph) -> Vec<&str> {
         (0..g.node_count() as usize)

@@ -1,4 +1,4 @@
-package com.jvandort.stax;
+package com.jvandort.stax.internal;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

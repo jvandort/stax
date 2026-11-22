@@ -1,4 +1,5 @@
 import com.jvandort.stax.buildlogic.BuildCargo
+import com.jvandort.stax.buildlogic.common.DirectorySystemProperty
 import com.jvandort.stax.buildlogic.jvm.RunApplication
 
 plugins {
@@ -32,6 +33,20 @@ jvm {
 
 repositories {
     mavenCentral()
+}
+
+dependencies {
+    api("org.jspecify:jspecify:1.0.1")
+}
+
+// Recordings and stacks files that the Rust and Java tests share.
+val testData = layout.projectDirectory.dir("src/test-data")
+
+tasks.test {
+    jvmArgumentProviders.add(objects.newInstance<DirectorySystemProperty>().apply {
+        name = "stax.test-data.path"
+        dir = testData
+    })
 }
 
 // Embed the vite-built index.html into the jar as a classpath resource so that

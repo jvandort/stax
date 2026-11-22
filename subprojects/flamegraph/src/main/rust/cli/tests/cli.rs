@@ -75,7 +75,7 @@ fn gzip(data: &[u8]) -> Vec<u8> {
 }
 
 fn jfr_fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../test-data/cpu-sample.jfr")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../test-data/cpu-sample.jfr")
 }
 
 #[test]

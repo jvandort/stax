@@ -77,23 +77,23 @@ const App = (): React.JSX.Element => {
             return
         }
 
-        const namesEl = document.getElementById("embedded-stacks-names")
+        const namesEl = document.getElementById("embedded-file-names")
         if (!namesEl) return
 
         const stackNames = namesEl.innerHTML.trim().split(",").map(atob)
         const stacks = stackNames.map((name, i) => {
             const template = document.getElementById(
-                `embedded-stacks-${i}`,
+                `embedded-file-${i}`,
             ) as HTMLTemplateElement
             if (!template) {
                 throw new Error(
-                    `Missing embedded stack template element: embedded-stacks-${i}`,
+                    `Missing embedded file template element: embedded-file-${i}`,
                 )
             }
             const encodedData = template.content.textContent
             if (encodedData === null) {
                 throw new Error(
-                    `Embedded stack template embedded-stacks-${i} has no text content`,
+                    `Embedded file template embedded-file-${i} has no text content`,
                 )
             }
             template.remove()

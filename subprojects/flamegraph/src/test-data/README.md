@@ -2,7 +2,8 @@
 
 ## cpu-sample.jfr
 
-A minimal JFR recording used by the tests in `src/jfr.rs`: a busy loop calling
+A minimal JFR recording used by the Rust tests (`src/main/rust/src/jfr.rs` and the CLI's) and
+the Java tests: a busy loop calling
 a recursive `Busy.fib(int)` through a `Supplier<Long>`, recorded for ~1.5s with
 only `jdk.ExecutionSample` enabled at a 1ms interval. Implementing
 `Supplier<Long>` makes the hot path go through a compiler-generated bridge

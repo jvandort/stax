@@ -1,6 +1,7 @@
 .idea/compiler.xml
 .idea/gradle.xml
 .idea/workspace.xml
+.idea/kotlinc.xml
 
 node_modules/
 .gradle/

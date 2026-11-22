@@ -6,15 +6,24 @@ import path from "node:path"
 import fs from "node:fs"
 import zlib from "node:zlib"
 
+/**
+ * The wasm-pack output, which Gradle's buildRustWasm task builds and its Vite tasks pass in,
+ * relative to this directory.
+ */
+function rustWasmDir(): string {
+    const dir: string | undefined = process.env["RUST_WASM_DIR"]
+    if (!dir) {
+        throw new Error("The RUST_WASM_DIR environment variable is required. Run Vite through Gradle, such as ./gradlew :stax:serveVite")
+    }
+    return path.resolve(import.meta.dirname, dir)
+}
+
 // Inject the wasm into the header as early as possible,
 // so the browser can initialize the worker as ASAP.
 const wasmPreloadPlugin = (isDev: boolean): PluginOption => ({
     name: "wasm-preloader",
     transformIndexHtml(_) {
-        const wasmPath = path.resolve(
-            import.meta.dirname,
-            "build/wasm/flamegraph_wasm_bg.wasm",
-        )
+        const wasmPath = path.resolve(rustWasmDir(), "flamegraph_wasm_bg.wasm")
 
         let wasmSource: string
         if (isDev) {
@@ -106,21 +115,21 @@ gamma;middleware;foo;logging 5`
     return {
         name: "dev-demo-stacks",
         // Inject the same DOM structure the Java wrapper produces:
-        //   <template id="embedded-stacks-names">base64name</template>
-        //   <template id="embedded-stacks-0">base64compresseddata</template>
+        //   <template id="embedded-file-names">base64name</template>
+        //   <template id="embedded-file-0">base64compresseddata</template>
         // Using body-prepend so the elements are parsed before the React
         // module script, avoiding any timing dependency.
         transformIndexHtml(_) {
             return [
                 {
                     tag: "template",
-                    attrs: { id: "embedded-stacks-names" },
+                    attrs: { id: "embedded-file-names" },
                     children: nameBase64,
                     injectTo: "body-prepend",
                 },
                 {
                     tag: "template",
-                    attrs: { id: "embedded-stacks-0" },
+                    attrs: { id: "embedded-file-0" },
                     children: encodedData,
                     injectTo: "body-prepend",
                 },
@@ -135,15 +144,13 @@ export default ({ command }: { command: string }): UserConfig => {
         root: "src/main/ts",
         publicDir: "../public",
         build: {
-            outDir: "../../../build/vite",
-            emptyOutDir: true,
             sourcemap: "hidden",
             assetsInlineLimit: 100000000, // Ensure wasm is always inlined
         },
         base: "./",
         resolve: {
             alias: {
-                "@flamegraph-wasm": path.resolve(import.meta.dirname, "build/wasm"),
+                "@flamegraph-wasm": rustWasmDir(),
             },
         },
         assetsInclude: ["**/*.wasm"],
@@ -157,7 +164,7 @@ export default ({ command }: { command: string }): UserConfig => {
                 configureServer(server) {
                     // Configure the dev server to watch the Rust directory for changes
                     server.watcher.add(path.resolve(import.meta.dirname, "src/main/rust"))
-                    server.watcher.add(path.resolve(import.meta.dirname, "build/wasm"))
+                    server.watcher.add(rustWasmDir())
                 },
             } satisfies PluginOption,
             isDev &&
@@ -170,7 +177,7 @@ export default ({ command }: { command: string }): UserConfig => {
                             startup: false,
                             run: [
                                 path.resolve(import.meta.dirname, "../../gradlew"),
-                                ":flamegraph:compileRust",
+                                ":stax:buildRustWasm",
                             ],
                             condition: (file) =>
                                 file.endsWith(".rs") ||

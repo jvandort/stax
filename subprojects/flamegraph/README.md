@@ -14,7 +14,7 @@ This application supports a number of features:
 
 ## Building the production version
 
-Run `./gradlew :flamegraph:build`.
+Run `./gradlew :stax:build`.
 
 ## Application Architecture
 
@@ -36,7 +36,7 @@ The resulting `index.html` is embedded as a resource in a small Java wrapper app
 accepts a list of profile files as input, compresses and encodes them, and injects them into an
 output `index.html`. The Java entry-point is `FlamegraphGenerator.java` in `src/main/java/`.
 Generate a demo with e.g.
-`./gradlew :flamegraph:buildDemo --stacks "/abs/path/profile-stacks.txt /abs/path/recording.jfr"`.
+`./gradlew :stax:buildDemo --embed "/abs/path/profile-stacks.txt /abs/path/recording.jfr"`.
 
 ## Command-line interface
 
@@ -44,7 +44,7 @@ Generate a demo with e.g.
 holds the loaded graphs, so each command is a separate, short-lived process.
 
 ```
-./gradlew :flamegraph:buildCli        # builds build/wasm-build/cli/stax
+./gradlew :stax:buildCli              # builds build/cargo/<host target>/cli/stax
 stax serve                            # start the daemon
 stax load app-stacks.txt rec.jfr      # -stacks.txt, -stacks.txt.gz, or .jfr
 stax list                             # graph IDs
@@ -71,19 +71,19 @@ developers needing to install these tools themselves.
 
 You can run arbitrary `cargo` commands using the managed installation.
 
-* **Unit tests:** `./gradlew :flamegraph:cargoTest`
-* **Lint:** `./gradlew :flamegraph:cargo --cmd "clippy"`
-* **Format:** `./gradlew :flamegraph:cargo --cmd "fmt"`
-* **Update crates:** `./gradlew :flamegraph:cargo --cmd "update"`
+* **Unit tests:** `./gradlew :stax:cargoTest`
+* **Lint:** `./gradlew :stax:cargo --cmd "clippy"`
+* **Format:** `./gradlew :stax:cargo --cmd "fmt"`
+* **Update crates:** `./gradlew :stax:cargo --cmd "update"`
 
 `Cargo.lock` is committed and the production build enforces it with `--locked`. After running
 `update`, verify the changes and commit the updated `Cargo.lock` before building.
 
 ### Node & NPM
 
-* **Type check:** `./gradlew :flamegraph:npx --cmd "tsc --noEmit"`
-* **NPM commands:** `./gradlew :flamegraph:npm --cmd "install --save some-pkg"`
-* **NPX commands:** `./gradlew :flamegraph:npx --cmd "vite"`
+* **Type check:** `./gradlew :stax:typecheck`
+* **NPM commands:** `./gradlew :stax:npm --cmd "install --save some-pkg"`
+* **NPX commands:** `./gradlew :stax:npx --cmd "vitest run src/test/ts/diffRendering.test.ts"`
 
 ## Development
 
@@ -92,7 +92,7 @@ TypeScript and Rust source files and performs hot-reloading on demand.
 
 Start the dev server:
 
-Run `/gradlew :flamegraph:serve`
+Run `./gradlew :stax:serveVite`
 
 This serves a live development version of the app at http://localhost:5173/
 
@@ -100,17 +100,17 @@ This serves a live development version of the app at http://localhost:5173/
 
 **Rust:**
 ```
-./gradlew :flamegraph:cargoTest
+./gradlew :stax:cargoTest
 ```
 
 **TypeScript (vitest, in `src/test/ts`):**
 ```
-./gradlew :flamegraph:tsTest
+./gradlew :stax:tsTest
 ```
 
-Both test suites also run automatically as part of `./gradlew :flamegraph:check`.
+Both test suites also run automatically as part of `./gradlew :stax:check`.
 
 **TypeScript (type check):**
 ```
-./gradlew :flamegraph:npx --cmd "tsc --noEmit"
+./gradlew :stax:typecheck
 ```

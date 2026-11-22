@@ -51,3 +51,27 @@ Expand it and look over the files and the POM. Choose **Publish**. That's the po
 choose **Drop** to throw the upload away. You can then fix things and upload the same version again.
 
 Publishing usually takes 10 to 30 minutes. The deployment shows as **Published** when it's done.
+
+## Release the `stax` CLI
+
+Tag the release:
+```sh
+export VERSION=""
+git tag -a v$VERSION -m "stax $VERSION"
+git push origin v$VERSION
+```
+
+Watch the workflow:
+```sh
+gh run watch
+```
+
+Validate the artifacts:
+```sh
+gh release view v$VERSION
+```
+
+Publish the release:
+```sh
+gh release edit v$VERSION --draft=false
+```

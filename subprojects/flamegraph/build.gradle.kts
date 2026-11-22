@@ -1,6 +1,7 @@
 import com.jvandort.stax.buildlogic.BuildCargo
 import com.jvandort.stax.buildlogic.common.DirectorySystemProperty
 import com.jvandort.stax.buildlogic.jvm.RunApplication
+import java.security.MessageDigest
 
 plugins {
     id("stax.jvm")
@@ -24,6 +25,29 @@ val buildCli = tasks.register<BuildCargo>("buildCli") {
     description = "Builds the Stax CLI binary."
     packageName = "stax"
     profile = "cli"
+}
+
+tasks.register<Tar>("packageCli") {
+    description = "Packages the CLI for a GitHub release, with its SHA-256."
+    compression = Compression.GZIP
+    from(layout.settingsDirectory.file("LICENSE"))
+    from(buildCli.flatMap { it.binary }) {
+        filePermissions {
+            unix("rwxr-xr-x")
+        }
+    }
+    val version = project.version
+    archiveFileName = buildCli.flatMap { it.target }.map { "stax-$version-$it.tar.gz" }
+    destinationDirectory = layout.buildDirectory.dir("cli-dist")
+
+    val shaFile = archiveFile.map { it.asFile.resolveSibling("${it.asFile.name}.sha256") }
+    outputs.file(shaFile)
+    doLast {
+        val archive = archiveFile.get().asFile
+        val digest = MessageDigest.getInstance("SHA-256").digest(archive.readBytes())
+        val hex = digest.joinToString("") { "%02x".format(it) }
+        shaFile.get().writeText("$hex  ${archive.name}\n")
+    }
 }
 
 wasmPack {

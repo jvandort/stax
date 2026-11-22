@@ -1,0 +1,70 @@
+# Builds the stax CLI for Apple silicon Macs and for Linux on arm64 and x86_64, and attaches the
+# archives to a draft GitHub release for the pushed tag (v1.0.0 and so on), with a build provenance attestation
+# for each archive (gh attestation verify). Publish the draft by hand.
+# Run it from the Actions tab to only build the archives, as a workflow artifact.
+name: Release CLI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { runner: macos-15, target: aarch64-apple-darwin }
+          # musl, so the binaries are static and run on any Linux distribution.
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: Build and package
+        run: ./gradlew :stax:packageCli -PrustTarget=${{ matrix.target }}
+      - name: Check the binary runs
+        run: |
+          mkdir smoke
+          tar xzf subprojects/flamegraph/build/cli-dist/*.tar.gz -C smoke
+          smoke/stax --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stax-${{ matrix.target }}
+          path: subprojects/flamegraph/build/cli-dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      # For the attestations: a Sigstore signing certificate, and storing the attestations.
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest@v4
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Attach to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --notes ""
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber

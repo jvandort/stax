@@ -21,6 +21,7 @@ import {nodeCount} from "./stackGraph"
 export const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraphData => {
     const childrenOffsets = wg.children_offsets()
     const childrenData = wg.children_data()
+    const nameIds = wg.name_ids()
     const namesData = wg.names_data()
     const namesOffsets = wg.names_offsets()
     const displayNamesData = wg.display_names_data()
@@ -30,6 +31,7 @@ export const wasmGraphToStackGraph = (wg: WasmStackGraph): StackGraphData => {
     return {
         childrenOffsets,
         childrenData,
+        nameIds,
         namesData,
         namesOffsets,
         displayNamesData,
@@ -134,12 +136,13 @@ export const mergeChildren = (
     graph: StackGraphData,
     nodeName: string,
 ): StackGraphData => {
-    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
+    const { childrenOffsets, childrenData, nameIds, namesData, namesOffsets, values } =
         graph
     return wasmGraphToStackGraph(
         wasm_merge_children(
             childrenOffsets,
             childrenData,
+            nameIds,
             namesData,
             namesOffsets,
             values,
@@ -149,12 +152,13 @@ export const mergeChildren = (
 }
 
 export const icicleGraph = (graph: StackGraphData, nodeId: number): StackGraphData => {
-    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
+    const { childrenOffsets, childrenData, nameIds, namesData, namesOffsets, values } =
         graph
     return wasmGraphToStackGraph(
         wasm_icicle_graph(
             childrenOffsets,
             childrenData,
+            nameIds,
             namesData,
             namesOffsets,
             values,
@@ -168,6 +172,7 @@ export const deleteNode = (graph: StackGraphData, nodeId: number): StackGraphDat
     const {
         childrenOffsets,
         childrenData,
+        nameIds,
         namesData,
         namesOffsets,
         values,
@@ -178,6 +183,7 @@ export const deleteNode = (graph: StackGraphData, nodeId: number): StackGraphDat
         wasm_delete_node(
             childrenOffsets,
             childrenData,
+            nameIds,
             namesData,
             namesOffsets,
             values,
@@ -189,11 +195,12 @@ export const deleteNode = (graph: StackGraphData, nodeId: number): StackGraphDat
 }
 
 export const simplifyGraph = (graph: StackGraphData, nodeId: number): StackGraphData => {
-    const { childrenOffsets, childrenData, namesData, namesOffsets, values } =
+    const { childrenOffsets, childrenData, nameIds, namesData, namesOffsets, values } =
         graph
     const wasmGraph = wasm_simplify_graph(
         childrenOffsets,
         childrenData,
+        nameIds,
         namesData,
         namesOffsets,
         values,
@@ -207,11 +214,13 @@ export const diffGraphs = (a: StackGraphData, b: StackGraphData): DiffGraphData 
     const wasmResult = wasm_diff_graphs(
         a.childrenOffsets,
         a.childrenData,
+        a.nameIds,
         a.namesData,
         a.namesOffsets,
         a.values,
         b.childrenOffsets,
         b.childrenData,
+        b.nameIds,
         b.namesData,
         b.namesOffsets,
         b.values,

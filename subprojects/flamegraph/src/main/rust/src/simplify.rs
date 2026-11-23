@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use wasm_bindgen::prelude::*;
 
-use crate::{get_children, get_name, GraphBuilder, WasmStackGraph};
+use crate::{get_children, GraphBuilder, Names, WasmStackGraph};
 
 /// Normalizes frame-type suffixes that only reflect JVM execution state:
 /// `_[0]` (interpreted), `_[1]` (C1-compiled), and `_[i]` (inlined) become
@@ -222,16 +222,22 @@ fn frame_type(name: &str) -> &str {
 pub fn wasm_simplify_graph(
     children_offsets: &[i32],
     children_data: &[i32],
+    name_ids: &[i32],
     names_data: &[u8],
     names_offsets: &[i32],
     values: &[i64],
     node_id: u32,
 ) -> WasmStackGraph {
+    let names = Names::new(name_ids, names_data, names_offsets);
     let node_id = node_id as usize;
-    let raw_root_name = get_name(names_data, names_offsets, node_id);
+    let raw_root_name = names.of(node_id);
     let root_name = simplify_name(raw_root_name);
     let mut new_graph = GraphBuilder::new(&root_name);
     new_graph.values[0] = values[node_id];
+
+    // The simplified name's id in new_graph for each original name id (u32::MAX until first
+    // needed), so each distinct name is simplified once rather than once per node.
+    let mut simplified_ids = vec![u32::MAX; names.string_count()];
 
     // Stack entries: (original_node_id, new_parent_id, parent_frame_type, fold_used).
     // parent_frame_type is the raw frame-type suffix of the frame that produced
@@ -243,9 +249,16 @@ pub fn wasm_simplify_graph(
     }
 
     while let Some((current, new_parent, parent_frame_type, fold_used)) = stack.pop() {
-        let raw_name = get_name(names_data, names_offsets, current);
-        let name = simplify_name(raw_name);
+        let raw_name = names.of(current);
         let raw_type = frame_type(raw_name);
+        let name_id = match simplified_ids[names.id(current)] {
+            u32::MAX => {
+                let id = new_graph.names().intern(&simplify_name(raw_name));
+                simplified_ids[names.id(current)] = id;
+                id
+            }
+            id => id,
+        };
 
         // Compilation-state transitions record the same function twice as a
         // direct parent/child pair with differing raw frame types — a JIT frame
@@ -258,14 +271,14 @@ pub fn wasm_simplify_graph(
         // node per path (fold_used): the fold is deliberately not transitive,
         // so e.g. `f_[j] -> f_[i] -> f_[j]` keeps its third frame rather than
         // swallowing what may be a real recursive call.
-        if !fold_used && raw_type != parent_frame_type && name == new_graph.node_names[new_parent] {
+        if !fold_used && raw_type != parent_frame_type && name_id == new_graph.name_id(new_parent) {
             for &child in get_children(children_offsets, children_data, current) {
                 stack.push((child as usize, new_parent, parent_frame_type, true));
             }
             continue;
         }
 
-        let (new_current, _) = new_graph.get_or_create_child(new_parent, &name, values[current]);
+        let (new_current, _) = new_graph.get_or_create_child_by_id(new_parent, name_id, values[current]);
 
         for &child in get_children(children_offsets, children_data, current) {
             stack.push((child as usize, new_current, raw_type, false));
@@ -282,24 +295,21 @@ mod tests {
 
     fn simplify(data: &[u8]) -> WasmStackGraph {
         let g = parse_stacks_impl(data);
-        wasm_simplify_graph(
+        let simplified = wasm_simplify_graph(
             &g.children_offsets,
             &g.children_data,
+            &g.name_ids,
             &g.names_data,
             &g.names_offsets,
             &g.values,
             0,
-        )
+        );
+        crate::testing::assert_valid_graph(&simplified);
+        simplified
     }
 
     fn node_names(g: &WasmStackGraph) -> Vec<String> {
-        (0..g.names_offsets.len().saturating_sub(1))
-            .map(|i| {
-                let start = g.names_offsets[i] as usize;
-                let end = g.names_offsets[i + 1] as usize;
-                String::from_utf8(g.names_data[start..end].to_vec()).unwrap()
-            })
-            .collect()
+        (0..g.node_count() as usize).map(|i| g.names().of(i).to_string()).collect()
     }
 
     fn count(g: &WasmStackGraph, name: &str) -> usize {

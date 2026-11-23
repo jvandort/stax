@@ -45,18 +45,28 @@ holds the loaded graphs, so each command is a separate, short-lived process.
 
 ```
 ./gradlew :stax:buildCli              # builds build/cargo/<host target>/cli/stax
-stax serve                            # start the daemon
-stax load app-stacks.txt rec.jfr      # -stacks.txt, -stacks.txt.gz, or .jfr
-stax list                             # graph IDs
-stax search 0 'traverseGraph' --limit 5
+stax                                  # the guide: every command and option
+stax load app-stacks.txt rec.jfr      # starts the daemon; prints graph IDs (0 and 1)
+stax top 0                            # functions by self samples
+stax search 0 traverseGraph           # find a function's ID by name
+stax fn 0 f12                         # one function: callers, callees, heaviest nodes
+stax calls 0 f12                      # what f12 calls, as a tree
+stax callers 0 f12                    # every call chain that reaches f12
 stax subtree 0 0                      # node 0 is the root
-stax simplify 0                       # merge JIT/inlined/interpreted variants of each frame
+stax aggregate 0 f12                  # graph 2: f12's call sites merged; f12 is still f12
+stax diff 0 1 --mode slower           # compare graph 0 (A) with graph 1 (B)
+stax unload 2
 stax shutdown
 ```
 
-Run `stax --help` and `stax <command> --help` for every command. Patterns are case-insensitive
-regular expressions matched against full (raw) frame names, which can differ from the names shown;
-`stax raw-name` prints one. Errors go to stderr with exit code 1.
+`stax` with no arguments prints a guide to every command and option, so that an agent that has never
+seen the tool learns it in one call. Patterns are case-insensitive regular expressions matched against
+full (raw) frame names, which can differ from the names shown. `stax raw-name` prints one. Errors go to
+stderr with exit code 1.
+
+`stax diff` works like the flamegraph's diff view. Lines show A, B and Δ = B − A, and the tree
+commands rank and budget them by the mode: `delta` (|Δ|), `slower` or `faster`. The other commands
+don't support diff graphs.
 
 The daemon listens on a Unix socket in `$XDG_RUNTIME_DIR/stax/`, or `~/.stax/` when that is unset,
 and logs to `~/.stax/daemon.log`. Windows is not supported. The CLI is a Cargo workspace member at
@@ -65,7 +75,9 @@ and logs to `~/.stax/daemon.log`. Windows is not supported. The CLI is a Cargo w
 ## Managed Toolchains
 
 This project manages its own versions of Node and Rust to ensure build reproducibility and avoid
-developers needing to install these tools themselves.
+developers needing to install these tools themselves. The one exception is a C linker: Rust links its
+build scripts and proc-macros with the system's `cc`, so install `build-essential` (Debian/Ubuntu) or the
+Xcode Command Line Tools (macOS). The Rust tasks fail early with that message if `cc` is missing.
 
 ### Rust & Cargo
 

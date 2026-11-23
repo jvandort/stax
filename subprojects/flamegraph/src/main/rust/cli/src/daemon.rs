@@ -17,13 +17,10 @@ use crate::protocol::{self, FAILURE, SUCCESS, VERSION_TAG};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// `stax serve`: starts the daemon in the background and waits until it accepts connections.
-pub fn serve() -> io::Result<ExitCode> {
+/// Starts the daemon in the background and waits until it accepts connections. Reports on stderr,
+/// so that stdout is the command's own output.
+pub fn start() -> io::Result<bool> {
     let socket = protocol::socket_path()?;
-    if UnixStream::connect(&socket).is_ok() {
-        println!("stax daemon already running ({})", socket.display());
-        return Ok(ExitCode::SUCCESS);
-    }
     protocol::create_private_dir(&protocol::state_dir()?)?;
     protocol::create_private_dir(&protocol::socket_dir()?)?;
     let log_path = protocol::log_path()?;
@@ -41,17 +38,21 @@ pub fn serve() -> io::Result<ExitCode> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         if UnixStream::connect(&socket).is_ok() {
-            println!("stax daemon started (pid {})", child.id());
-            return Ok(ExitCode::SUCCESS);
+            eprintln!("Started the stax daemon (pid {}).", child.id());
+            return Ok(true);
         }
+        // Exits at once if another `load` started a daemon first: then that one answers.
         if let Some(status) = child.try_wait()? {
+            if UnixStream::connect(&socket).is_ok() {
+                return Ok(true);
+            }
             eprintln!("stax daemon exited during startup ({status}); see {}", log_path.display());
-            return Ok(ExitCode::FAILURE);
+            return Ok(false);
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     eprintln!("stax daemon did not start within {STARTUP_TIMEOUT:?}; see {}", log_path.display());
-    Ok(ExitCode::FAILURE)
+    Ok(false)
 }
 
 /// `stax __daemon`: serves requests until `stax shutdown`.
@@ -95,7 +96,7 @@ fn handle(mut stream: UnixStream, session: &Mutex<Session>, socket: &Path) {
     // `shutdown` is accepted from any version, so a mismatched daemon can always be stopped.
     let (status, text, shutdown) = if version != VERSION_TAG && args != [OsString::from("shutdown")] {
         let text = format!(
-            "the running daemon is {VERSION_TAG} but this client is {version}; restart it with `stax shutdown && stax serve`"
+            "the running daemon is {VERSION_TAG} but this client is {version}; stop it with `stax shutdown`, and the next `stax load` starts this one"
         );
         (FAILURE, text, false)
     } else {
@@ -127,67 +128,80 @@ fn handle(mut stream: UnixStream, session: &Mutex<Session>, socket: &Path) {
 fn execute(command: Command, session: &Mutex<Session>) -> Outcome {
     let lock = || session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match command {
-        Command::Load { paths } => {
+        Command::Load { paths, raw } => {
             let mut graphs = Vec::new();
             for path in &paths {
                 if !path.is_absolute() {
                     return Err(format!("{}: path is not absolute", path.display()));
                 }
-                graphs.extend(commands::parse_profile(path)?);
+                graphs.extend(commands::parse_profile(path, raw)?);
             }
             lock().load(graphs)
         }
         Command::Unload { graph } => lock().unload(graph),
         Command::List => lock().list(),
-        Command::Search { graph, pattern, limit, offset, under } => {
+        Command::Top { graph, by, under, page } => {
             let (name, g) = lock().get(graph)?;
-            commands::search(&name, &g, &pattern, limit, offset, under)
+            commands::rank_functions("top", &name, &g, None, by, under, page)
+        }
+        Command::Search { graph, pattern, by, under, page } => {
+            let (name, g) = lock().get(graph)?;
+            commands::rank_functions("search", &name, &g, Some(&pattern), by, under, page)
+        }
+        Command::Fn { graph, function, under, limit } => {
+            let (name, g) = lock().get(graph)?;
+            commands::function(&name, &g, function.0, under, limit)
+        }
+        Command::Calls { graph, function, under, tree } => {
+            let (name, g) = lock().get(graph)?;
+            commands::calls(&name, &g, function.0, under, tree.max_lines, !tree.no_collapse)
+        }
+        Command::Callers { graph, function, under, tree } => {
+            let (name, g) = lock().get(graph)?;
+            commands::callers(&name, &g, function.0, under, tree.max_lines, !tree.no_collapse)
+        }
+        Command::Subtree { graph, node, tree } => {
+            let (name, g) = lock().get(graph)?;
+            commands::subtree(&name, &g, node, tree.max_lines, !tree.no_collapse)
+        }
+        Command::Children { graph, node, page } => {
+            let (name, g) = lock().get(graph)?;
+            commands::children(&name, &g, node, page)
         }
         Command::Node { graph, node, parent_depth } => {
             let (name, g) = lock().get(graph)?;
             commands::node_details(&name, &g, node, parent_depth)
         }
-        Command::Children { graph, node, limit } => {
+        Command::RawName { graph, id } => {
             let (name, g) = lock().get(graph)?;
-            commands::children(&name, &g, node, limit)
+            commands::raw_name(&name, &g, id)
         }
-        Command::Aggregate { graph, target } => {
+        Command::Aggregate { graph, function } => {
             let (name, g) = lock().get(graph)?;
-            let (new_name, merged, note) = commands::aggregate(&name, &g, &target)?;
+            let (new_name, merged, note) = commands::aggregate(&name, &g, function.0)?;
             let node_count = merged.node_count();
             let id = lock().register(new_name.clone(), merged);
-            Ok(commands::created("merged", id, &new_name, node_count, &note))
+            Ok(commands::created(id, &new_name, node_count, &note))
         }
-        Command::Icicle { graph, target } => {
+        Command::Icicle { graph, node } => {
             let (name, g) = lock().get(graph)?;
-            let (new_name, icicle) = commands::icicle(&name, &g, &target)?;
+            let (new_name, icicle) = commands::icicle(&name, &g, node)?;
             let node_count = icicle.node_count();
             let id = lock().register(new_name.clone(), icicle);
-            Ok(commands::created("icicle", id, &new_name, node_count, ""))
+            let note = format!(" Its root's children rank functions by self samples: `stax children {id} 0`.");
+            Ok(commands::created(id, &new_name, node_count, &note))
         }
-        Command::Simplify { graph, node } => {
-            let (name, g) = lock().get(graph)?;
-            let (new_name, simplified) = commands::simplify(&name, &g, node)?;
-            let node_count = simplified.node_count();
-            let id = lock().register(new_name.clone(), simplified);
-            Ok(commands::created("simplified", id, &new_name, node_count, ""))
+        Command::Diff { a, b, mode } => {
+            let ((a_name, a_graph), (b_name, b_graph)) = {
+                let session = lock();
+                (session.get(a)?, session.get(b)?)
+            };
+            let (new_name, diff) = commands::diff(&a_name, &a_graph, &b_name, &b_graph, mode)?;
+            let node_count = diff.node_count();
+            let id = lock().register(new_name.clone(), diff);
+            let note = format!(" A is graph {a}, B is graph {b}.");
+            Ok(commands::created(id, &new_name, node_count, &note))
         }
-        Command::RawName { graph, node } => {
-            let (_, g) = lock().get(graph)?;
-            commands::raw_name(&g, node)
-        }
-        Command::HotPath { graph, node, depth_limit, max_lines, no_collapse } => {
-            let (name, g) = lock().get(graph)?;
-            commands::hot_path(&name, &g, node, depth_limit, max_lines, !no_collapse)
-        }
-        Command::Subtree { graph, node, max_lines, no_collapse } => {
-            let (name, g) = lock().get(graph)?;
-            commands::subtree(&name, &g, node, max_lines, !no_collapse)
-        }
-        Command::Callers { graph, target, max_lines } => {
-            let (name, g) = lock().get(graph)?;
-            commands::callers(&name, &g, &target, max_lines)
-        }
-        Command::Serve | Command::Shutdown | Command::Daemon => Err("not a daemon command".to_string()),
+        Command::Shutdown | Command::Daemon => Err("not a daemon command".to_string()),
     }
 }

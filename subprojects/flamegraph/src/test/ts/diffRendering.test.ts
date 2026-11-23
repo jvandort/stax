@@ -92,6 +92,8 @@ const buildGraphData = (): StackGraphData => {
     return {
         childrenOffsets,
         childrenData: new Int32Array(childrenFlat),
+        // One string per node: these tests don't depend on names being shared.
+        nameIds: Int32Array.from(NAMES.keys()),
         namesData,
         namesOffsets,
         // Graph A's sample counts ride in the merged graph's values array.

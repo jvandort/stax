@@ -1,21 +1,23 @@
 use ahash::{AHashMap, AHashSet};
 
-use crate::{WasmDiffGraph, WasmStackGraph};
+use crate::{Names, WasmDiffGraph, WasmStackGraph};
 
+/// Builds the CSR children arrays, with each node's children sorted by name. `rank[id]` is name
+/// `id`'s position in sorted order, so sorting compares integers rather than strings.
 fn build_children_csr(
-    node_names: &[String],
-    children: &[AHashMap<String, usize>],
+    node_name_ids: &[u32],
+    children: &[AHashMap<u32, usize>],
+    rank: &[u32],
 ) -> (Vec<i32>, Vec<i32>) {
-    let size = node_names.len();
+    let size = node_name_ids.len();
     let mut children_offsets: Vec<i32> = Vec::with_capacity(size + 1);
-    let mut children_data: Vec<i32> = Vec::new();
+    let mut children_data: Vec<i32> = Vec::with_capacity(size.saturating_sub(1));
 
-    for i in 0..size {
+    for child_map in children {
         children_offsets.push(children_data.len() as i32);
-        let child_map = &children[i];
         if !child_map.is_empty() {
             let mut ids: Vec<usize> = child_map.values().copied().collect();
-            ids.sort_unstable_by(|&a, &b| node_names[a].cmp(&node_names[b]));
+            ids.sort_unstable_by_key(|&id| rank[node_name_ids[id] as usize]);
             for id in ids {
                 children_data.push(id as i32);
             }
@@ -139,6 +141,8 @@ fn format_display_name(p: &ParsedName, show_params: bool, show_line: bool) -> St
     s
 }
 
+/// Computes the display name of each name. Which details a display name shows depends only on the
+/// set of distinct names, so this works the same on a list of distinct names as on per-node names.
 fn compute_display_names(node_names: &[String]) -> Vec<String> {
     let parsed_names: Vec<(&str, Option<ParsedName<'_>>)> = node_names.iter()
         .map(|n| (n.as_str(), parse_method_name(n)))
@@ -192,109 +196,216 @@ fn encode_strings<S: AsRef<str>>(strings: &[S]) -> (Vec<u8>, Vec<i32>) {
     (data, offsets)
 }
 
+/// The distinct names of a graph under construction, each stored once and identified by its
+/// index in insertion order.
+pub(crate) struct NameTable {
+    names: Vec<String>,
+    ids: AHashMap<String, u32>,
+}
+
+impl NameTable {
+    fn new() -> Self {
+        NameTable { names: Vec::new(), ids: AHashMap::new() }
+    }
+
+    /// Returns the id of `name`, adding it if new.
+    pub(crate) fn intern(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.ids.get(name) {
+            return id;
+        }
+        let id = self.names.len() as u32;
+        self.names.push(name.to_string());
+        self.ids.insert(name.to_string(), id);
+        id
+    }
+
+    /// `rank[id]` is name `id`'s position in sorted order.
+    fn rank(&self) -> Vec<u32> {
+        let mut order: Vec<u32> = (0..self.names.len() as u32).collect();
+        order.sort_unstable_by(|&a, &b| self.names[a as usize].cmp(&self.names[b as usize]));
+        let mut rank = vec![0; order.len()];
+        for (position, id) in order.into_iter().enumerate() {
+            rank[id as usize] = position as u32;
+        }
+        rank
+    }
+}
+
+/// The node structure shared by [`GraphBuilder`] and [`DiffBuilder`]: interned node names and
+/// each node's children by name.
+struct Nodes {
+    names: NameTable,
+    /// node_name_ids[i] is the name of node i
+    node_name_ids: Vec<u32>,
+    /// children[i] maps child name id → child node id
+    children: Vec<AHashMap<u32, usize>>,
+}
+
+impl Nodes {
+    fn new(root_name: &str) -> Self {
+        let mut names = NameTable::new();
+        let root = names.intern(root_name);
+        Nodes { names, node_name_ids: vec![root], children: vec![AHashMap::new()] }
+    }
+
+    /// Returns `(node_id, was_created)`.
+    fn get_or_create_child(&mut self, parent: usize, name_id: u32) -> (usize, bool) {
+        if let Some(&id) = self.children[parent].get(&name_id) {
+            return (id, false);
+        }
+        let id = self.node_name_ids.len();
+        self.node_name_ids.push(name_id);
+        self.children.push(AHashMap::new());
+        self.children[parent].insert(name_id, id);
+        (id, true)
+    }
+
+    fn into_wasm_stack_graph(self, values: Vec<i64>) -> WasmStackGraph {
+        let (children_offsets, children_data) =
+            build_children_csr(&self.node_name_ids, &self.children, &self.names.rank());
+        let display_names = compute_display_names(&self.names.names);
+        let (names_data, names_offsets) = encode_strings(&self.names.names);
+        let (display_names_data, display_names_offsets) = encode_strings(&display_names);
+
+        WasmStackGraph {
+            children_offsets,
+            children_data,
+            name_ids: self.node_name_ids.into_iter().map(|id| id as i32).collect(),
+            names_data,
+            names_offsets,
+            display_names_data,
+            display_names_offsets,
+            values,
+        }
+    }
+}
+
 /// An append-only stack graph builder used to accumulate stacks before converting
 /// to the flat `WasmStackGraph` format for transfer to JS.
 pub(crate) struct GraphBuilder {
-    /// children[i] maps child name → child node id
-    pub(crate) children: Vec<AHashMap<String, usize>>,
-    /// node_names[i] is the name of node i
-    pub(crate) node_names: Vec<String>,
+    nodes: Nodes,
     /// values[i] is the number of samples for node i
     pub(crate) values: Vec<i64>,
 }
 
 impl GraphBuilder {
     pub(crate) fn new(root_name: &str) -> Self {
-        GraphBuilder {
-            children: vec![AHashMap::new()],
-            node_names: vec![root_name.to_string()],
-            values: vec![0],
-        }
+        GraphBuilder { nodes: Nodes::new(root_name), values: vec![0] }
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.values.len()
+    }
+
+    /// The graph's names, to intern names for [`Self::get_or_create_child_by_id`].
+    pub(crate) fn names(&mut self) -> &mut NameTable {
+        &mut self.nodes.names
+    }
+
+    /// The name id of node `i`.
+    pub(crate) fn name_id(&self, i: usize) -> u32 {
+        self.nodes.node_name_ids[i]
     }
 
     /// Returns `(node_id, was_created)`.
     pub(crate) fn get_or_create_child(&mut self, parent: usize, name: &str, weight: i64) -> (usize, bool) {
-        if let Some(&id) = self.children[parent].get(name) {
-            self.values[id] += weight;
-            return (id, false);
+        let name_id = self.nodes.names.intern(name);
+        self.get_or_create_child_by_id(parent, name_id, weight)
+    }
+
+    /// Like [`Self::get_or_create_child`], for node `source` of another graph's `names`. `id_map`
+    /// caches the other graph's name ids in this one (`u32::MAX` for not yet interned), so each
+    /// distinct name is hashed once rather than once per node.
+    pub(crate) fn get_or_create_child_from(
+        &mut self,
+        parent: usize,
+        names: &Names,
+        source: usize,
+        id_map: &mut [u32],
+        weight: i64,
+    ) -> (usize, bool) {
+        let source_id = names.id(source);
+        if id_map[source_id] == u32::MAX {
+            id_map[source_id] = self.nodes.names.intern(names.string(source_id));
         }
-        let id = self.node_names.len();
-        self.node_names.push(name.to_string());
-        self.children.push(AHashMap::new());
-        self.values.push(weight);
-        self.children[parent].insert(name.to_string(), id);
-        (id, true)
+        self.get_or_create_child_by_id(parent, id_map[source_id], weight)
+    }
+
+    /// Like [`Self::get_or_create_child`], for a name already interned in [`Self::names`].
+    pub(crate) fn get_or_create_child_by_id(&mut self, parent: usize, name_id: u32, weight: i64) -> (usize, bool) {
+        let (id, created) = self.nodes.get_or_create_child(parent, name_id);
+        if created {
+            self.values.push(weight);
+        } else {
+            self.values[id] += weight;
+        }
+        (id, created)
     }
 
     pub(crate) fn into_wasm_stack_graph(self) -> WasmStackGraph {
-        let (children_offsets, children_data) = build_children_csr(&self.node_names, &self.children);
-        let display_names = compute_display_names(&self.node_names);
-        let (names_data, names_offsets) = encode_strings(&self.node_names);
-        let (display_names_data, display_names_offsets) = encode_strings(&display_names);
+        self.nodes.into_wasm_stack_graph(self.values)
+    }
 
-        WasmStackGraph {
-            children_offsets,
-            children_data,
-            names_data,
-            names_offsets,
-            display_names_data,
-            display_names_offsets,
-            values: self.values,
+    /// Removes nodes without samples, keeping the root and the others' relative order. A node with
+    /// samples has a parent with samples (values cover children), so no kept node loses its parent.
+    pub(crate) fn remove_empty_nodes(&mut self) {
+        let keep: Vec<bool> = (0..self.node_count()).map(|i| i == 0 || self.values[i] > 0).collect();
+        let mut new_ids = vec![usize::MAX; keep.len()];
+        let mut next = 0;
+        for (i, &kept) in keep.iter().enumerate() {
+            if kept {
+                new_ids[i] = next;
+                next += 1;
+            }
+        }
+        let nodes = &mut self.nodes;
+        retain_kept(&mut nodes.node_name_ids, &keep);
+        retain_kept(&mut self.values, &keep);
+        retain_kept(&mut nodes.children, &keep);
+        for children in &mut nodes.children {
+            children.retain(|_, child| keep[*child]);
+            for child in children.values_mut() {
+                *child = new_ids[*child];
+            }
         }
     }
 }
 
+/// Keeps the elements of a per-node array whose `keep` flag is set.
+fn retain_kept<T>(items: &mut Vec<T>, keep: &[bool]) {
+    *items = std::mem::take(items).into_iter().zip(keep).filter_map(|(item, &kept)| kept.then_some(item)).collect();
+}
+
 /// Like [`GraphBuilder`] but accumulates two parallel value arrays for diff graphs.
 pub(crate) struct DiffBuilder {
-    children: Vec<AHashMap<String, usize>>,
-    node_names: Vec<String>,
+    nodes: Nodes,
     pub(crate) values_a: Vec<i64>,
     pub(crate) values_b: Vec<i64>,
 }
 
 impl DiffBuilder {
     pub(crate) fn new(root_name: &str) -> Self {
-        DiffBuilder {
-            children: vec![AHashMap::new()],
-            node_names: vec![root_name.to_string()],
-            values_a: vec![0],
-            values_b: vec![0],
-        }
+        DiffBuilder { nodes: Nodes::new(root_name), values_a: vec![0], values_b: vec![0] }
     }
 
     /// Returns `(node_id, was_created)`.
     pub(crate) fn get_or_create_child(&mut self, parent: usize, name: &str, weight_a: i64, weight_b: i64) -> (usize, bool) {
-        if let Some(&id) = self.children[parent].get(name) {
+        let name_id = self.nodes.names.intern(name);
+        let (id, created) = self.nodes.get_or_create_child(parent, name_id);
+        if created {
+            self.values_a.push(weight_a);
+            self.values_b.push(weight_b);
+        } else {
             self.values_a[id] += weight_a;
             self.values_b[id] += weight_b;
-            return (id, false);
         }
-        let id = self.node_names.len();
-        self.node_names.push(name.to_string());
-        self.children.push(AHashMap::new());
-        self.values_a.push(weight_a);
-        self.values_b.push(weight_b);
-        self.children[parent].insert(name.to_string(), id);
-        (id, true)
+        (id, created)
     }
 
     pub(crate) fn build(self) -> WasmDiffGraph {
-        let (children_offsets, children_data) = build_children_csr(&self.node_names, &self.children);
-        let display_names = compute_display_names(&self.node_names);
-        let (names_data, names_offsets) = encode_strings(&self.node_names);
-        let (display_names_data, display_names_offsets) = encode_strings(&display_names);
-
         // Graph A's sample counts ride in the inner graph's values array;
         // graph B's travel alongside in b_values.
-        let graph = WasmStackGraph {
-            children_offsets,
-            children_data,
-            names_data,
-            names_offsets,
-            display_names_data,
-            display_names_offsets,
-            values: self.values_a,
-        };
+        let graph = self.nodes.into_wasm_stack_graph(self.values_a);
         WasmDiffGraph { graph, b_values: self.values_b }
     }
 }

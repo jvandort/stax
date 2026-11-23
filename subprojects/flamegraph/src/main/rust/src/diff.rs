@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use wasm_bindgen::prelude::*;
 
 use crate::simplify::wasm_simplify_graph;
-use crate::{get_children, get_name, DiffBuilder, WasmDiffGraph, WasmStackGraph};
+use crate::{get_children, DiffBuilder, Names, WasmDiffGraph, WasmStackGraph};
 
 /// Merges the children of `a_node` and `b_node` by name using a sorted merge, and pushes
 /// `(name, a_child, b_child, new_parent)` entries onto `stack` for each unique child name.
@@ -18,12 +18,10 @@ fn push_matched_children<'a>(
     new_parent: usize,
     a_children_offsets: &[i32],
     a_children_data: &[i32],
-    a_names_data: &'a [u8],
-    a_names_offsets: &[i32],
+    a_names: &Names<'a>,
     b_children_offsets: &[i32],
     b_children_data: &[i32],
-    b_names_data: &'a [u8],
-    b_names_offsets: &[i32],
+    b_names: &Names<'a>,
 ) {
     let a_children = a_node
         .map(|a| get_children(a_children_offsets, a_children_data, a))
@@ -37,8 +35,8 @@ fn push_matched_children<'a>(
     while ai < a_children.len() && bi < b_children.len() {
         let a_child = a_children[ai] as usize;
         let b_child = b_children[bi] as usize;
-        let a_name = get_name(a_names_data, a_names_offsets, a_child);
-        let b_name = get_name(b_names_data, b_names_offsets, b_child);
+        let a_name = a_names.of(a_child);
+        let b_name = b_names.of(b_child);
         match a_name.cmp(b_name) {
             std::cmp::Ordering::Equal => {
                 stack.push((a_name, Some(a_child), Some(b_child), new_parent));
@@ -56,16 +54,17 @@ fn push_matched_children<'a>(
         }
     }
     for &a_child in &a_children[ai..] {
-        stack.push((get_name(a_names_data, a_names_offsets, a_child as usize), Some(a_child as usize), None, new_parent));
+        stack.push((a_names.of(a_child as usize), Some(a_child as usize), None, new_parent));
     }
     for &b_child in &b_children[bi..] {
-        stack.push((get_name(b_names_data, b_names_offsets, b_child as usize), None, Some(b_child as usize), new_parent));
+        stack.push((b_names.of(b_child as usize), None, Some(b_child as usize), new_parent));
     }
 }
 
 fn diff_simplified(a: &WasmStackGraph, b: &WasmStackGraph) -> WasmDiffGraph {
-    let a_root_name = get_name(&a.names_data, &a.names_offsets, 0);
-    let b_root_name = get_name(&b.names_data, &b.names_offsets, 0);
+    let (a_names, b_names) = (a.names(), b.names());
+    let a_root_name = a_names.of(0);
+    let b_root_name = b_names.of(0);
     let root_name = if a_root_name == b_root_name {
         Cow::Borrowed(a_root_name)
     } else {
@@ -81,8 +80,8 @@ fn diff_simplified(a: &WasmStackGraph, b: &WasmStackGraph) -> WasmDiffGraph {
     push_matched_children(
         &mut stack,
         Some(0), Some(0), 0,
-        &a.children_offsets, &a.children_data, &a.names_data, &a.names_offsets,
-        &b.children_offsets, &b.children_data, &b.names_data, &b.names_offsets,
+        &a.children_offsets, &a.children_data, &a_names,
+        &b.children_offsets, &b.children_data, &b_names,
     );
 
     while let Some((name, a_node, b_node, new_parent)) = stack.pop() {
@@ -94,8 +93,8 @@ fn diff_simplified(a: &WasmStackGraph, b: &WasmStackGraph) -> WasmDiffGraph {
         push_matched_children(
             &mut stack,
             a_node, b_node, new_current,
-            &a.children_offsets, &a.children_data, &a.names_data, &a.names_offsets,
-            &b.children_offsets, &b.children_data, &b.names_data, &b.names_offsets,
+            &a.children_offsets, &a.children_data, &a_names,
+            &b.children_offsets, &b.children_data, &b_names,
         );
     }
 
@@ -113,17 +112,19 @@ fn diff_simplified(a: &WasmStackGraph, b: &WasmStackGraph) -> WasmDiffGraph {
 pub fn wasm_diff_graphs(
     a_children_offsets: &[i32],
     a_children_data: &[i32],
+    a_name_ids: &[i32],
     a_names_data: &[u8],
     a_names_offsets: &[i32],
     a_values: &[i64],
     b_children_offsets: &[i32],
     b_children_data: &[i32],
+    b_name_ids: &[i32],
     b_names_data: &[u8],
     b_names_offsets: &[i32],
     b_values: &[i64],
 ) -> WasmDiffGraph {
-    let a = wasm_simplify_graph(a_children_offsets, a_children_data, a_names_data, a_names_offsets, a_values, 0);
-    let b = wasm_simplify_graph(b_children_offsets, b_children_data, b_names_data, b_names_offsets, b_values, 0);
+    let a = wasm_simplify_graph(a_children_offsets, a_children_data, a_name_ids, a_names_data, a_names_offsets, a_values, 0);
+    let b = wasm_simplify_graph(b_children_offsets, b_children_data, b_name_ids, b_names_data, b_names_offsets, b_values, 0);
     diff_simplified(&a, &b)
 }
 
@@ -135,20 +136,18 @@ mod tests {
     fn diff(a: &[u8], b: &[u8]) -> WasmDiffGraph {
         let ga = parse_stacks_impl(a);
         let gb = parse_stacks_impl(b);
-        wasm_diff_graphs(
-            &ga.children_offsets, &ga.children_data, &ga.names_data, &ga.names_offsets, &ga.values,
-            &gb.children_offsets, &gb.children_data, &gb.names_data, &gb.names_offsets, &gb.values,
-        )
+        let g = wasm_diff_graphs(
+            &ga.children_offsets, &ga.children_data, &ga.name_ids, &ga.names_data, &ga.names_offsets, &ga.values,
+            &gb.children_offsets, &gb.children_data, &gb.name_ids, &gb.names_data, &gb.names_offsets, &gb.values,
+        );
+        crate::testing::assert_valid_graph(&g.graph);
+        // B's counts must form a valid graph over the same nodes too.
+        crate::testing::assert_valid_graph(&WasmStackGraph { values: g.b_values.clone(), ..g.graph.clone() });
+        g
     }
 
     fn node_names(g: &WasmDiffGraph) -> Vec<String> {
-        (0..g.graph.names_offsets.len().saturating_sub(1))
-            .map(|i| {
-                let start = g.graph.names_offsets[i] as usize;
-                let end = g.graph.names_offsets[i + 1] as usize;
-                String::from_utf8(g.graph.names_data[start..end].to_vec()).unwrap()
-            })
-            .collect()
+        (0..g.graph.node_count() as usize).map(|i| g.graph.names().of(i).to_string()).collect()
     }
 
     #[test]

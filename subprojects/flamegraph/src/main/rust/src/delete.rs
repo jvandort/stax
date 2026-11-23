@@ -6,12 +6,13 @@ use crate::{build_parent_map, get_children, Error, WasmStackGraph};
 /// and subtracting its weight from all ancestors.
 ///
 /// The deleted node and its entire subtree are left as unreachable orphans in the
-/// names, display names, and values arrays — they are never visited during rendering,
+/// name ids and values arrays — they are never visited during rendering,
 /// so this is harmless and avoids a full graph compaction.
 #[wasm_bindgen]
 pub fn wasm_delete_node(
     children_offsets: &[i32],
     children_data: &[i32],
+    name_ids: &[i32],
     names_data: &[u8],
     names_offsets: &[i32],
     values: &[i64],
@@ -24,7 +25,7 @@ pub fn wasm_delete_node(
         return Err(Error::DeleteRoot);
     }
 
-    let size = names_offsets.len().saturating_sub(1);
+    let size = name_ids.len();
     let parents = build_parent_map(children_offsets, children_data);
 
     let parent_id = parents[to_delete];
@@ -65,10 +66,69 @@ pub fn wasm_delete_node(
     Ok(WasmStackGraph {
         children_offsets: new_children_offsets,
         children_data: new_children_data,
+        name_ids: name_ids.to_vec(),
         names_data: names_data.to_vec(),
         names_offsets: names_offsets.to_vec(),
         display_names_data: display_names_data.to_vec(),
         display_names_offsets: display_names_offsets.to_vec(),
         values: new_values,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse_stacks_impl;
+    use crate::testing::assert_valid_graph;
+
+    fn delete(g: &WasmStackGraph, node: u32) -> Result<WasmStackGraph, Error> {
+        wasm_delete_node(
+            &g.children_offsets,
+            &g.children_data,
+            &g.name_ids,
+            &g.names_data,
+            &g.names_offsets,
+            &g.values,
+            &g.display_names_data,
+            &g.display_names_offsets,
+            node,
+        )
+    }
+
+    fn find(g: &WasmStackGraph, name: &str) -> usize {
+        (0..g.node_count() as usize).find(|&i| g.names().of(i) == name).unwrap()
+    }
+
+    #[test]
+    fn test_delete_subtracts_from_ancestors_and_unlinks() {
+        let g = parse_stacks_impl(b"a;b;c 5\na;b;d 3\na;e 2\n");
+        let (a, b, d) = (find(&g, "a"), find(&g, "b"), find(&g, "d"));
+        let deleted = delete(&g, d as u32).unwrap();
+        assert_valid_graph(&deleted);
+        assert_eq!((deleted.values[0], deleted.values[a], deleted.values[b]), (7, 7, 5));
+        let b_children = get_children(&deleted.children_offsets, &deleted.children_data, b);
+        assert_eq!(b_children.iter().map(|&c| deleted.names().of(c as usize)).collect::<Vec<_>>(), ["c"]);
+        // Nodes keep their ids and names; the deleted one is left as an unreachable orphan.
+        assert_eq!(deleted.name_ids, g.name_ids);
+        assert_eq!(deleted.names().of(d), "d");
+    }
+
+    #[test]
+    fn test_delete_subtree() {
+        let g = parse_stacks_impl(b"a;b;c 5\na;e 2\n");
+        let deleted = delete(&g, find(&g, "b") as u32).unwrap();
+        assert_valid_graph(&deleted);
+        assert_eq!(deleted.values[0], 2);
+        assert_eq!(deleted.values[find(&g, "a")], 2);
+    }
+
+    #[test]
+    fn test_delete_errors() {
+        let g = parse_stacks_impl(b"a;b 1\n");
+        assert!(matches!(delete(&g, 0), Err(Error::DeleteRoot)));
+        // Deleting an already deleted node: it no longer has a parent.
+        let b = find(&g, "b") as u32;
+        let deleted = delete(&g, b).unwrap();
+        assert!(matches!(delete(&deleted, b), Err(Error::NoParent(_))));
+    }
 }

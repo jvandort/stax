@@ -9,6 +9,9 @@ pub use error::Error;
 mod diff;
 pub use diff::wasm_diff_graphs;
 
+mod callgraph;
+pub use callgraph::CallGraph;
+
 mod delete;
 pub use delete::wasm_delete_node;
 
@@ -29,19 +32,58 @@ pub use parser::parse_stacks_impl;
 mod simplify;
 pub use simplify::wasm_simplify_graph;
 
+#[cfg(test)]
+mod testing;
+
 #[wasm_bindgen(start)]
 pub fn main_js() {
     #[cfg(debug_assertions)]
     console_error_panic_hook::set_once();
 }
 
-/// Get the name of node `i` as a &str directly from the CSR names data.
-#[inline]
-pub(crate) fn get_name<'a>(names_data: &'a [u8], names_offsets: &[i32], i: usize) -> &'a str {
-    let start = names_offsets[i] as usize;
-    let end = names_offsets[i + 1] as usize;
-    // SAFETY: `names_data` must be valid UTF-8. All flamegraph inputs are UTF-8 encoded text.
-    unsafe { std::str::from_utf8_unchecked(&names_data[start..end]) }
+/// A graph's node names: the name of node `i` is string `ids[i]` of the string table.
+#[derive(Clone, Copy)]
+pub(crate) struct Names<'a> {
+    ids: &'a [i32],
+    data: &'a [u8],
+    offsets: &'a [i32],
+}
+
+impl<'a> Names<'a> {
+    pub(crate) fn new(ids: &'a [i32], data: &'a [u8], offsets: &'a [i32]) -> Self {
+        Names { ids, data, offsets }
+    }
+
+    /// The name of node `i`.
+    #[inline]
+    pub(crate) fn of(&self, i: usize) -> &'a str {
+        self.string(self.ids[i] as usize)
+    }
+
+    /// The name id of node `i`.
+    #[inline]
+    pub(crate) fn id(&self, i: usize) -> usize {
+        self.ids[i] as usize
+    }
+
+    /// String `id` of the string table.
+    #[inline]
+    pub(crate) fn string(&self, id: usize) -> &'a str {
+        let start = self.offsets[id] as usize;
+        let end = self.offsets[id + 1] as usize;
+        // SAFETY: `data` must be valid UTF-8. All flamegraph inputs are UTF-8 encoded text.
+        unsafe { std::str::from_utf8_unchecked(&self.data[start..end]) }
+    }
+
+    /// The number of strings in the string table.
+    pub(crate) fn string_count(&self) -> usize {
+        self.offsets.len().saturating_sub(1)
+    }
+
+    /// The id of `name` in the string table, if present.
+    pub(crate) fn find(&self, name: &str) -> Option<usize> {
+        (0..self.string_count()).find(|&id| self.string(id) == name)
+    }
 }
 
 /// Get the children of node `i` as a slice of node IDs from the CSR children data.
@@ -71,18 +113,18 @@ pub(crate) fn build_parent_map(children_offsets: &[i32], children_data: &[i32]) 
 ///   children of node i = children_data[children_offsets[i] .. children_offsets[i+1]]
 ///   children are sorted alphabetically by node name.
 ///
-/// Node names and display names are stored as UTF-8 byte buffers with offset arrays:
-///   name of node i = names_data[names_offsets[i] .. names_offsets[i+1]]
-///
-/// TODO: `names_data` and `display_names_data` store the full bytes of every node's name,
-/// including duplicates where the same method name appears under different parents. For large
-/// profiles these buffers dominate memory (~44 MB and ~20 MB respectively for a 1 GB stacks
-/// file). A string-interning scheme — storing each distinct name once and using an indirection
-/// layer in the offset arrays — could significantly reduce this cost.
+/// Names are interned: each distinct name is stored once in a string table of UTF-8 byte buffers
+/// with offset arrays, and each node refers to its name by id:
+///   name of node i = string name_ids[i]
+///   string s = names_data[names_offsets[s] .. names_offsets[s+1]]
+/// Display names are indexed by the same ids:
+///   display name of node i = display_names_data[display_names_offsets[name_ids[i]] ..]
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct WasmStackGraph {
     pub(crate) children_offsets: Vec<i32>,
     pub(crate) children_data: Vec<i32>,
+    pub(crate) name_ids: Vec<i32>,
     pub(crate) names_data: Vec<u8>,
     pub(crate) names_offsets: Vec<i32>,
     pub(crate) display_names_data: Vec<u8>,
@@ -93,7 +135,7 @@ pub struct WasmStackGraph {
 #[wasm_bindgen]
 impl WasmStackGraph {
     pub fn node_count(&self) -> u32 {
-        self.names_offsets.len().saturating_sub(1) as u32
+        self.name_ids.len() as u32
     }
 
     pub fn children_offsets(&self) -> Vec<i32> {
@@ -102,6 +144,10 @@ impl WasmStackGraph {
 
     pub fn children_data(&self) -> Vec<i32> {
         self.children_data.clone()
+    }
+
+    pub fn name_ids(&self) -> Vec<i32> {
+        self.name_ids.clone()
     }
 
     pub fn names_data(&self) -> Vec<u8> {
@@ -130,6 +176,7 @@ impl WasmStackGraph {
 pub struct StackGraphData {
     pub children_offsets: Vec<i32>,
     pub children_data: Vec<i32>,
+    pub name_ids: Vec<i32>,
     pub names_data: Vec<u8>,
     pub names_offsets: Vec<i32>,
     pub display_names_data: Vec<u8>,
@@ -138,11 +185,16 @@ pub struct StackGraphData {
 }
 
 impl WasmStackGraph {
+    pub(crate) fn names(&self) -> Names<'_> {
+        Names::new(&self.name_ids, &self.names_data, &self.names_offsets)
+    }
+
     /// Moves the graph's arrays out without copying them.
     pub fn into_data(self) -> StackGraphData {
         StackGraphData {
             children_offsets: self.children_offsets,
             children_data: self.children_data,
+            name_ids: self.name_ids,
             names_data: self.names_data,
             names_offsets: self.names_offsets,
             display_names_data: self.display_names_data,

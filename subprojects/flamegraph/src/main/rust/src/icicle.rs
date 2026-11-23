@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-use crate::{build_parent_map, get_children, get_name, GraphBuilder, WasmStackGraph};
+use crate::{build_parent_map, get_children, GraphBuilder, Names, WasmStackGraph};
 
 /// Discovers all "slices" in the subtree rooted at `target`, where a slice is a node with positive
 /// self-time. Slices are sorted heaviest first. Each slice is `(node_id, self_weight)`. Note, a
@@ -42,10 +42,10 @@ fn write_caller_chain(
     mut budget: usize,
     target: usize,
     parents: &[i32],
-    names_data: &[u8],
-    names_offsets: &[i32],
+    names: &Names,
+    id_map: &mut [u32],
 ) -> usize {
-    let initial_size = new_graph.node_names.len();
+    let initial_size = new_graph.node_count();
 
     loop {
         if budget == 0 || original_node == target {
@@ -53,8 +53,7 @@ fn write_caller_chain(
         }
 
         // Add the new node if it is not already present, adding the weight of this stack.
-        let name = get_name(names_data, names_offsets, original_node);
-        let (new_node, created) = new_graph.get_or_create_child(new_parent, name, weight);
+        let (new_node, created) = new_graph.get_or_create_child_from(new_parent, names, original_node, id_map, weight);
         budget = budget.saturating_sub(created as usize);
 
         // Walk the caller chain upward until we hit the target node.
@@ -66,7 +65,7 @@ fn write_caller_chain(
         original_node = original_parent as usize;
     }
 
-    new_graph.node_names.len() - initial_size
+    new_graph.node_count() - initial_size
 }
 
 /// Build icicle graph based off the subgraph of some original graph, rooted at `node_id`.
@@ -87,18 +86,21 @@ fn write_caller_chain(
 pub fn wasm_icicle_graph(
     children_offsets: &[i32],
     children_data: &[i32],
+    name_ids: &[i32],
     names_data: &[u8],
     names_offsets: &[i32],
     values: &[i64],
     node_id: u32,
     max_nodes: u32,
 ) -> WasmStackGraph {
+    let names = Names::new(name_ids, names_data, names_offsets);
     let target = node_id as usize;
     let parents = build_parent_map(children_offsets, children_data);
     let slices = discover_slices(children_offsets, children_data, values, target);
 
     let total_weight = values[target];
-    let mut new_graph = GraphBuilder::new(get_name(names_data, names_offsets, target));
+    let mut new_graph = GraphBuilder::new(names.of(target));
+    let mut id_map = vec![u32::MAX; names.string_count()];
     new_graph.values[0] = total_weight;
 
     let mut weight = total_weight;
@@ -122,8 +124,8 @@ pub fn wasm_icicle_graph(
             alloc,
             target,
             &parents,
-            names_data,
-            names_offsets
+            &names,
+            &mut id_map,
         );
     }
 
@@ -138,9 +140,7 @@ mod tests {
     fn first_node_with_name(g: &WasmStackGraph, name: &str) -> usize {
         let n = g.node_count() as usize;
         for i in 0..n {
-            let s = g.names_offsets[i] as usize;
-            let e = g.names_offsets[i + 1] as usize;
-            if &g.names_data[s..e] == name.as_bytes() {
+            if g.names().of(i) == name {
                 return i;
             }
         }
@@ -151,9 +151,7 @@ mod tests {
     fn assert_no_node(g: &WasmStackGraph, name: &str) {
         let n = g.node_count() as usize;
         for i in 0..n {
-            let s = g.names_offsets[i] as usize;
-            let e = g.names_offsets[i + 1] as usize;
-            if &g.names_data[s..e] == name.as_bytes() {
+            if g.names().of(i) == name {
                 panic!("expected no node '{}' but found one", name);
             }
         }
@@ -166,11 +164,13 @@ mod tests {
     fn icicle(stacks: &str, root_name: &str, max_nodes: u32) -> WasmStackGraph {
         let base = parse_stacks_impl(stacks.as_bytes());
         let root_id = first_node_with_name(&base, root_name) as u32;
-        wasm_icicle_graph(
+        let g = wasm_icicle_graph(
             &base.children_offsets, &base.children_data,
-            &base.names_data, &base.names_offsets,
+            &base.name_ids, &base.names_data, &base.names_offsets,
             &base.values, root_id, max_nodes,
-        )
+        );
+        crate::testing::assert_valid_graph(&g);
+        g
     }
 
     #[test]
@@ -191,9 +191,7 @@ mod tests {
     #[test]
     fn test_root_name_matches_target() {
         let g = icicle("a;b;x 10\na;c;y 5\n", "a", 10);
-        let s = g.names_offsets[0] as usize;
-        let e = g.names_offsets[1] as usize;
-        assert_eq!(&g.names_data[s..e], b"a", "root node should be named after the target");
+        assert_eq!(g.names().of(0), "a", "root node should be named after the target");
     }
 
     #[test]

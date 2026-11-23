@@ -110,6 +110,7 @@ export type WorkerResponse = WorkerSuccess | WorkerFailure
 const stackGraphTransferables = (g: StackGraphData): Transferable[] => [
     g.childrenOffsets.buffer,
     g.childrenData.buffer,
+    g.nameIds.buffer,
     g.namesData.buffer,
     g.namesOffsets.buffer,
     g.displayNamesData.buffer,

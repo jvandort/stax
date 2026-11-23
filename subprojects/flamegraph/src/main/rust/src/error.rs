@@ -10,8 +10,9 @@ use wasm_bindgen::prelude::*;
 /// constructing a JS value would panic.
 #[derive(Debug)]
 pub enum Error {
-    /// A `-stacks.txt` line that isn't UTF-8 frames, a space, and a sample count.
-    MalformedLine(String),
+    /// A `-stacks.txt` line that isn't UTF-8 frames, a space, and a sample count: its 1-based
+    /// number and its text.
+    MalformedLine(u64, String),
     /// The input does not start with the JFR chunk magic.
     NotJfr,
     /// A JFR chunk header declares a size smaller than the header itself.
@@ -39,7 +40,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::MalformedLine(line) => write!(f, "malformed input: expected `frame;frame;... count`, got: {line}"),
+            Error::MalformedLine(number, line) => {
+                write!(f, "line {number}: malformed input: expected `frame;frame;... count`, got: {line}")
+            }
             Error::NotJfr => write!(f, "Not a JFR file (bad chunk magic)"),
             Error::InvalidJfrChunkSize(size) => write!(f, "Invalid JFR chunk size: {size}"),
             Error::JfrChunkTooLarge(size) => write!(f, "JFR chunk too large: {size} bytes"),

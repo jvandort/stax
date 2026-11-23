@@ -147,6 +147,13 @@ fn frame_name(frame: &Accessor) -> Option<String> {
     Some(name)
 }
 
+/// A formatted frame name, with its name id in the cpu (0) and wall (1) builders, or `u32::MAX`
+/// until interned there.
+struct CachedName {
+    name: String,
+    ids: [u32; 2],
+}
+
 /// Returns the constant-pool reference of a frame's field without resolving
 /// it, for use as a cache key. `None` when the value is stored inline.
 fn cp_index(acc: Option<Accessor>) -> Option<(i64, i64)> {
@@ -187,54 +194,62 @@ fn fold_chunks(
         let (mut chunk_reader, chunk) =
             chunk.map_err(Error::JfrChunk)?;
         // Frame names repeat heavily via the constant pool; cache the formatted
-        // name per (method ref, frame-type ref). Pool indices are per-chunk.
-        // `None` marks a bridge frame, which is dropped from the stack.
-        let mut name_cache: AHashMap<((i64, i64), (i64, i64)), Option<String>> = AHashMap::new();
+        // name per (method ref, frame-type ref), with its id in each builder once
+        // interned there. Pool indices are per-chunk. `None` marks a bridge
+        // frame, which is dropped from the stack.
+        let mut name_cache: AHashMap<((i64, i64), (i64, i64)), Option<CachedName>> = AHashMap::new();
 
         for event in chunk_reader.events(&chunk) {
             let event = event.map_err(Error::JfrEvent)?;
-            let (builder, used) = match event.class.name() {
-                "jdk.ExecutionSample" | "jdk.NativeMethodSample" => (&mut *cpu, &mut *cpu_used),
-                "profiler.WallClockSample" => (&mut *wall, &mut *wall_used),
+            let (builder, used, kind) = match event.class.name() {
+                "jdk.ExecutionSample" | "jdk.NativeMethodSample" => (&mut *cpu, &mut *cpu_used, 0),
+                "profiler.WallClockSample" => (&mut *wall, &mut *wall_used, 1),
                 _ => continue,
             };
 
             let value = event.value();
             let weight = event_weight(event.class.name(), &value);
-            let Some(frames) = value
-                .get_field("stackTrace")
-                .and_then(|st| st.get_field("frames"))
-                .and_then(|f| f.as_iter())
-            else {
+            let Some(stack_trace) = value.get_field("stackTrace") else {
                 continue;
             };
+            let Some(frames) = stack_trace.get_field("frames").and_then(|f| f.as_iter()) else {
+                continue;
+            };
+            let truncated = stack_trace
+                .get_field("truncated")
+                .is_some_and(|t| bool::try_from(t.value).unwrap_or(false));
 
             // JFR stacks are leaf-first; the graph is built root-first.
             let frames: Vec<Accessor> = frames.collect();
             if frames.is_empty() {
                 continue;
             }
+            // A truncated stack lacks its outermost frames, so its callers are unknown: group it
+            // under a placeholder rather than presenting what remains as a root.
             let mut parent = 0usize;
+            if truncated {
+                (parent, _) = builder.get_or_create_child(0, TRUNCATED_FRAME, weight);
+            }
             for frame in frames.iter().rev() {
                 let key = cp_index(frame.get_field_raw("method"))
                     .map(|m| (m, cp_index(frame.get_field_raw("type")).unwrap_or((-1, -1))));
-                let uncached;
-                let name: &str = match key {
+                let name_id = match key {
                     Some(key) => {
-                        match name_cache.entry(key).or_insert_with(|| frame_name(frame)) {
-                            Some(name) => name,
-                            None => continue,
+                        let cached = name_cache
+                            .entry(key)
+                            .or_insert_with(|| frame_name(frame).map(|name| CachedName { name, ids: [u32::MAX; 2] }));
+                        let Some(cached) = cached else { continue };
+                        if cached.ids[kind] == u32::MAX {
+                            cached.ids[kind] = builder.names().intern(&cached.name);
                         }
+                        cached.ids[kind]
                     }
                     None => match frame_name(frame) {
-                        Some(name) => {
-                            uncached = name;
-                            &uncached
-                        }
+                        Some(name) => builder.names().intern(&name),
                         None => continue,
                     },
                 };
-                (parent, _) = builder.get_or_create_child(parent, name, weight);
+                (parent, _) = builder.get_or_create_child_by_id(parent, name_id, weight);
             }
             builder.values[0] += weight;
             *used = true;
@@ -242,6 +257,9 @@ fn fold_chunks(
     }
     Ok(())
 }
+
+/// The frame under which stacks that JFR truncated (at its stack depth limit) are grouped.
+pub const TRUNCATED_FRAME: &str = "[truncated]";
 
 const JFR_MAGIC: [u8; 4] = [b'F', b'L', b'R', 0];
 /// Bytes needed to frame a chunk: magic (4) + version (4) + chunk size (8).
@@ -355,7 +373,11 @@ impl JfrParser {
 pub(crate) fn parse_jfr_impl(data: &[u8]) -> Result<Vec<(String, WasmStackGraph)>, Error> {
     let mut parser = JfrParser::new();
     parser.feed(data)?;
-    Ok(parser.finish()?.into_graphs())
+    let graphs = parser.finish()?.into_graphs();
+    for (_, graph) in &graphs {
+        crate::testing::assert_valid_graph(graph);
+    }
+    Ok(graphs)
 }
 
 /// The graphs decoded from one JFR file, one per sample kind present:
@@ -394,7 +416,6 @@ impl WasmJfrGraphs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::get_name;
 
     #[test]
     fn test_decode_descriptor_params() {
@@ -435,7 +456,7 @@ mod tests {
 
     fn node_names(g: &WasmStackGraph) -> Vec<&str> {
         (0..g.node_count() as usize)
-            .map(|i| get_name(&g.names_data, &g.names_offsets, i))
+            .map(|i| g.names().of(i))
             .collect()
     }
 
@@ -530,6 +551,28 @@ mod tests {
             !has_same_prefix_child(graph, "Busy.get()"),
             "bridge frame should not stack Busy.get() on Busy.get()"
         );
+    }
+
+    /// The fixture has one stack JFR truncated at its 64-frame limit (javac's
+    /// TypeEnter$Phase.completeEnvs recursion), checked with
+    /// `jfr print --json --stack-depth 200 --events jdk.ExecutionSample`.
+    #[test]
+    fn test_truncated_stacks_are_grouped_under_a_placeholder() {
+        let graphs = parse_jfr_impl(CPU_SAMPLE_JFR).unwrap();
+        let (_, graph) = &graphs[0];
+        let names = node_names(graph);
+        let root_children = crate::get_children(&graph.children_offsets, &graph.children_data, 0);
+        let truncated = root_children
+            .iter()
+            .map(|&c| c as usize)
+            .find(|&c| names[c] == TRUNCATED_FRAME)
+            .expect("a [truncated] root child");
+        assert_eq!(graph.values[truncated], 1);
+        let below = crate::get_children(&graph.children_offsets, &graph.children_data, truncated);
+        assert_eq!(below.len(), 1);
+        assert!(names[below[0] as usize].starts_with("com.sun.tools.javac.comp.TypeEnter$Phase.completeEnvs"));
+        // No other root child is a fragment of that stack.
+        assert!(!root_children.iter().any(|&c| names[c as usize].contains("completeEnvs")));
     }
 
     /// Genuine recursion is not a bridge and must be preserved.

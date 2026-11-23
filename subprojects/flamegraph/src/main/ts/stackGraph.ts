@@ -8,12 +8,16 @@ const decoder = new TextDecoder()
  * Children are stored in CSR format:
  *   children of node i = childrenData[childrenOffsets[i] .. childrenOffsets[i+1]]
  *
- * Names and display names are UTF-8 byte buffers with parallel offset arrays:
- *   name of node i = namesData[namesOffsets[i] .. namesOffsets[i+1]]
+ * Names are interned: each distinct name is stored once in a string table of
+ * UTF-8 byte buffers with offset arrays, and each node refers to its name by id:
+ *   name of node i = string nameIds[i]
+ *   string s = namesData[namesOffsets[s] .. namesOffsets[s+1]]
+ * Display names are indexed by the same ids.
  */
 export interface StackGraphData {
     childrenOffsets: Int32Array
     childrenData: Int32Array
+    nameIds: Int32Array
     namesData: Uint8Array
     namesOffsets: Int32Array
     values: BigInt64Array
@@ -34,7 +38,7 @@ export interface GraphLike {
 }
 
 /**
- * A stack graph with lazily-decoded string caches.
+ * A stack graph with lazily-decoded string caches, one entry per distinct name.
  */
 export class StackGraph implements GraphLike {
     private readonly data: StackGraphData
@@ -44,7 +48,7 @@ export class StackGraph implements GraphLike {
 
     constructor(data: StackGraphData) {
         this.data = data
-        const n = data.namesOffsets.length - 1
+        const n = data.namesOffsets.length - 1 // distinct names
         this.nameCache = new Array(n)
         this.displayNameCache = new Array(n)
         this.lowerNameCache = new Array(n)
@@ -69,27 +73,29 @@ export class StackGraph implements GraphLike {
 
     /** Returns the full name of node `i`. */
     getNodeName(i: number): string {
-        return (this.nameCache[i] ??= decoder.decode(
+        const id = this.data.nameIds[i]!
+        return (this.nameCache[id] ??= decoder.decode(
             this.data.namesData.subarray(
-                this.data.namesOffsets[i],
-                this.data.namesOffsets[i + 1],
+                this.data.namesOffsets[id],
+                this.data.namesOffsets[id + 1],
             ),
         ))
     }
 
     /** Returns the display name of node `i`. */
     getDisplayName(i: number): string {
-        return (this.displayNameCache[i] ??= decoder.decode(
+        const id = this.data.nameIds[i]!
+        return (this.displayNameCache[id] ??= decoder.decode(
             this.data.displayNamesData.subarray(
-                this.data.displayNamesOffsets[i],
-                this.data.displayNamesOffsets[i + 1],
+                this.data.displayNamesOffsets[id],
+                this.data.displayNamesOffsets[id + 1],
             ),
         ))
     }
 
     /** Returns the lowercased name of node `i`. */
     getNodeNameLower(i: number): string {
-        return (this.lowerNameCache[i] ??= this.getNodeName(i).toLowerCase())
+        return (this.lowerNameCache[this.data.nameIds[i]!] ??= this.getNodeName(i).toLowerCase())
     }
 
     /**
@@ -103,7 +109,7 @@ export class StackGraph implements GraphLike {
 
 /** Returns the number of nodes in a raw StackGraphData. Used in the worker where StackGraph is not available. */
 export function nodeCount(graph: StackGraphData): number {
-    return graph.namesOffsets.length - 1
+    return graph.nameIds.length
 }
 
 /**

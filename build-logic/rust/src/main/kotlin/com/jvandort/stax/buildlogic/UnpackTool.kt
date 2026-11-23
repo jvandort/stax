@@ -12,7 +12,11 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import javax.inject.Inject
 
-abstract class UnpackWasmPack : DefaultTask() {
+/**
+ * Unpacks a tool's tarball into outputDir, without the tarball's top-level directory, and makes
+ * binFile, the tool's executable, executable.
+ */
+abstract class UnpackTool : DefaultTask() {
 
     @get:InputFile
     abstract val archive: RegularFileProperty
@@ -35,7 +39,7 @@ abstract class UnpackWasmPack : DefaultTask() {
             from(archive.map { archiveOperations.tarTree(it) }) {
                 eachFile {
                     this.relativePath = RelativePath(true, *this.relativePath.segments.drop(1).toTypedArray<String>())
-                    if (name == "wasm-pack") {
+                    if (name == binFile.get().asFile.name) {
                         permissions {
                             user {
                                 execute = true

@@ -10,6 +10,7 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import java.io.File
 
 /**
  * Builds a crate to WebAssembly, with its JavaScript bindings, using wasm-pack.
@@ -18,6 +19,12 @@ abstract class BuildRustWasm : CargoExec() {
 
     @get:InputFile
     abstract val wasmPackBin: RegularFileProperty
+
+    /**
+     * The wasm-opt wasm-pack runs. wasm-pack uses one it finds on the PATH, rather than download one.
+     */
+    @get:InputFile
+    abstract val wasmOptBin: RegularFileProperty
 
     /**
      * The directory of the crate to build.
@@ -39,6 +46,7 @@ abstract class BuildRustWasm : CargoExec() {
     fun build() {
         exec {
             executable = wasmPackBin.get().asFile.absolutePath
+            environment("PATH", "${wasmOptBin.get().asFile.parent}${File.pathSeparator}${environment["PATH"]}")
             args(
                 "build",
                 "--target", moduleTarget.get(),

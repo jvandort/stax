@@ -1,6 +1,7 @@
 package com.jvandort.stax.buildlogic
 
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.Internal
@@ -40,6 +41,7 @@ abstract class CargoExec : DefaultTask() {
      * Runs a command with the toolchain's environment, in workingDir.
      */
     protected fun exec(configure: ExecSpec.() -> Unit) {
+        checkLinker()
         val cargoHome = cargoHome.get().asFile.absolutePath
         execOperations.exec {
             environment(mapOf(
@@ -50,6 +52,19 @@ abstract class CargoExec : DefaultTask() {
             ))
             workingDir(this@CargoExec.workingDir.get().asFile)
             configure()
+        }
+    }
+
+    /**
+     * Rust links build scripts and proc-macros, even for the wasm build, with the system's cc.
+     */
+    private fun checkLinker() {
+        val path = System.getenv("PATH").orEmpty().split(File.pathSeparator)
+        if (path.none { File(it, "cc").canExecute() }) {
+            throw GradleException(
+                "Building the Rust code needs a C linker, but `cc` is not on the PATH. Install one: " +
+                    "`build-essential` on Debian/Ubuntu, or the Xcode Command Line Tools on macOS (`xcode-select --install`)."
+            )
         }
     }
 

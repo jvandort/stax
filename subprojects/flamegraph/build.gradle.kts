@@ -52,6 +52,7 @@ tasks.register<Tar>("packageCli") {
 
 wasmPack {
     version = "0.15.0"
+    binaryenVersion = "version_117"
 }
 
 node {
